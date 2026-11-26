@@ -1,0 +1,91 @@
+[project]
+name = "real2sim-layered"
+version = "0.1.0"
+description = "Layered common-sense Real2Sim agent with local physics escalation and anomaly fallback"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "torch>=2.7.0",
+    "torchvision>=0.22.0",
+    "mujoco>=3.3.0",
+    "numpy>=2.0.0",
+    "scipy>=1.14.0",
+    "opencv-python-headless>=4.10.0",
+    "pillow>=11.0.0",
+    "trimesh>=4.6.0",
+    "imageio>=2.36.0",
+    "imageio-ffmpeg>=0.6.0",
+    "huggingface-hub>=0.29.0",
+    "pydantic>=2.10.0",
+    "pyyaml>=6.0.2",
+    "openai>=1.60.0",
+    "matplotlib>=3.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "ruff>=0.9.0",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128" }]
+torchvision = [{ index = "pytorch-cu128" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/real2sim_layered"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "scripts", "tests"]
+extend-exclude = ["cache", "data", "outputs", "tmp", "tools"]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "SIM",
+    "RUF",
+    "C90",
+    "T20",
+]
+ignore = [
+    "E501",  # Line length is enforced by ruff format
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/*.py" = ["T201"]  # CLI helper scripts print status output
+"tests/*.py" = ["T201"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.pyright]
+pythonVersion = "3.11"
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "standard"
+include = ["src", "scripts", "tests"]
+exclude = ["cache", "data", "outputs", "tmp", "tools", ".venv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,14 @@
+source_roots = ["src"]
+exact = true
+exclude = [
+  "cache",
+  "data",
+  "outputs",
+  "tmp",
+  "tools",
+  ".venv",
+]
+
+[[modules]]
+path = "real2sim_layered"
+depends_on = []
