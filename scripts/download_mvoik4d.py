@@ -1,4 +1,4 @@
-"""Resumable full downloader for Lijiaxin0111/MVOIK-4D dataset into PFS."""
+"""Resumable downloader for Lijiaxin0111/MVOIK-4D dataset into PFS."""
 
 from __future__ import annotations
 
@@ -9,6 +9,40 @@ from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
+PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+
+
+def load_hf_token(env_file: Path) -> str | None:
+    """Load HF_TOKEN from environment or a local .env file without echoing it."""
+    token = os.environ.get("HF_TOKEN")
+    if token:
+        return token.strip()
+    if not env_file.is_file():
+        return None
+    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        if key.strip() == "HF_TOKEN":
+            cleaned = val.strip().strip('"').strip("'")
+            if cleaned:
+                return cleaned
+    return None
+
+
+def clear_proxy_env() -> None:
+    """Remove proxy environment variables so requests connect directly."""
+    for key in PROXY_ENV_KEYS:
+        os.environ.pop(key, None)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Download MVOIK-4D dataset from HuggingFace.")
@@ -18,13 +52,39 @@ def main() -> None:
         default=Path(os.environ.get("REAL2SIM_ROOT", ".")) / "data" / "MVOIK-4D",
         help="Destination directory for MVOIK-4D.",
     )
-    parser.add_argument("--workers", type=int, default=8, help="Parallel download workers.")
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=Path(os.environ.get("REAL2SIM_ROOT", ".")) / ".env",
+        help="Optional .env file providing HF_TOKEN.",
+    )
+    parser.add_argument("--workers", type=int, default=16, help="Parallel download workers.")
     parser.add_argument("--retries", type=int, default=5, help="Retry count on transient errors.")
+    parser.add_argument(
+        "--allow-patterns",
+        action="append",
+        default=None,
+        help="Repeatable glob pattern filter (e.g., 'with_gt/**'). Omit for full dataset.",
+    )
+    parser.add_argument(
+        "--no-proxy",
+        action="store_true",
+        help="Unset HTTP(S)_PROXY environment variables to connect directly.",
+    )
     args = parser.parse_args()
+
+    if args.no_proxy:
+        clear_proxy_env()
+
+    token = load_hf_token(args.env_file)
+    auth_state = "authenticated" if token else "unauthenticated"
+    route_state = "direct (--no-proxy)" if args.no_proxy else "env-proxy"
+    scope = ", ".join(args.allow_patterns) if args.allow_patterns else "FULL"
 
     args.out.mkdir(parents=True, exist_ok=True)
     print(
-        f"Downloading full Lijiaxin0111/MVOIK-4D to {args.out} (workers={args.workers}) ...",
+        f"Downloading Lijiaxin0111/MVOIK-4D [{scope}] to {args.out} "
+        f"(workers={args.workers}, {auth_state}, {route_state}) ...",
         flush=True,
     )
 
@@ -37,6 +97,8 @@ def main() -> None:
                 repo_type="dataset",
                 local_dir=str(args.out),
                 max_workers=args.workers,
+                allow_patterns=args.allow_patterns,
+                token=token,
             )
             elapsed = time.time() - t0
             print(f"Download completed on attempt {attempt} in {elapsed:.1f}s.", flush=True)
