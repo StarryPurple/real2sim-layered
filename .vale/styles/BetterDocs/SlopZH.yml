@@ -1,0 +1,14 @@
+extends: existence
+message: "Avoid ChatGPT-style Chinese padding '%s'."
+level: warning
+nonword: true
+tokens:
+  - 需要注意的是
+  - 值得一提的是
+  - 不仅如此
+  - 总而言之
+  - 综上所述
+  - 本质上来说
+  - 毫不夸张
+  - 显而易见
+  - 强大而灵活

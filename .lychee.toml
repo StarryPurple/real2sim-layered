@@ -1,0 +1,12 @@
+# Optional lychee link-checker configuration (from better-docs).
+# Auto-discovered by scripts/check-docs.sh at `.lychee.toml`.
+offline = true
+hidden = true
+include_verbatim = false
+exclude_path = [
+  '(^|/)\.git(/|$)',
+  '(^|/)vendor(/|$)',
+  '(^|/)node_modules(/|$)',
+  '(^|/)\.agents/notes/archived(/|$)',
+  '(^|/)\.agents/scratch(/|$)',
+]

@@ -1,0 +1,18 @@
+extends: existence
+message: "Avoid LLM filler, hype, or PR-vantage phrasing '%s'."
+level: warning
+ignorecase: true
+tokens:
+  - seamless
+  - seamlessly
+  - effortless
+  - delve
+  - tapestry
+  - testament to
+  - in conclusion
+  - it is worth noting
+  - it is important to note
+  - this PR
+  - this branch
+  - rejected in review
+  - review round

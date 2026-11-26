@@ -1,0 +1,7 @@
+extends: existence
+message: "Remove internal draft or audit marker '%s' from prose."
+level: error
+nonword: true
+tokens:
+  - '\(decision [0-9]+\)'
+  - '\(audit [A-Z][0-9]+\)'

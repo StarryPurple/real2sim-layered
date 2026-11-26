@@ -20,7 +20,7 @@ basic_instruction.md   Original Chinese course/research topic brief (read-only r
 ```sh
 make check          # Run formatting check, lint, typecheck, boundary check, shell check, docs check, and tests
 make format         # Format Python (ruff) and authored Bash scripts (shfmt)
-make lint           # Run read-only code checks (ruff, pyright, tach, shellcheck, shfmt -d)
+make lint           # Run read-only code checks (ruff, pyright, tach, shellcheck, shfmt -d, gitleaks)
 make test           # Run pytest test suite
 make docs           # Run ./scripts/check-docs.sh
 make check-env      # Verify GPU PyTorch, headless MuJoCo EGL, and headless Blender 4.2

@@ -11,7 +11,7 @@ SHELL_SCRIPTS := scripts/env.sh
 help:
 	@echo "Targets:"
 	@echo "  make format     Format Python (ruff) and authored shell scripts (shfmt)"
-	@echo "  make lint       Run read-only code checks (ruff, pyright, tach, shellcheck, shfmt -d)"
+	@echo "  make lint       Run read-only code checks (ruff, pyright, tach, shellcheck, shfmt -d, gitleaks)"
 	@echo "  make docs       Run deterministic better-docs check gate"
 	@echo "  make test       Run pytest test suite"
 	@echo "  make check      Run full verification (lint + docs + test)"
@@ -29,6 +29,7 @@ lint:
 	tach check
 	shfmt -d -i 2 -ci $(SHELL_SCRIPTS)
 	shellcheck $(SHELL_SCRIPTS)
+	gitleaks git --no-banner --redact
 
 docs:
 	./scripts/check-docs.sh

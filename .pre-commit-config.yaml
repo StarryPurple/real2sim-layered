@@ -46,9 +46,15 @@ repos:
         files: ^scripts/.*\.sh$
         exclude: ^scripts/check-docs\.sh$
 
+      - id: gitleaks
+        name: gitleaks
+        entry: gitleaks git --staged --no-banner --redact
+        language: system
+        pass_filenames: false
+
       - id: check-docs
         name: check-docs
         entry: ./scripts/check-docs.sh
         language: system
-        files: (^docs-check\.conf$|\.(md|yaml)$)
+        files: (^docs-check\.conf$|^\.lychee\.toml$|^\.vale\.ini$|\.(md|yaml|yml)$)
         pass_filenames: false
