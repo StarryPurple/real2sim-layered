@@ -2,7 +2,7 @@
 
 Layered common-sense Real2Sim agent with local physics escalation and anomaly fallback for reconstructing dynamic 4D multi-object interactions from monocular video on **MVOIK-4D**.
 
-> **Project status**: Repository scaffolding, GPU/simulation environment, dataset downloader, and code/documentation quality gates are operational. Core agent, simulation, and evaluation modules under `src/real2sim_layered/` are in active development.
+> **Project status**: Environment verification, MVOIK-4D `with_gt` loader and 5-case cross-regime probe manifest, MuJoCo physical diagnostics + dual-axis evaluator, local OpenAI-compatible `Qwen/Qwen3.5-4B` VLM server/client, and full code/doc gates are operational. Layer 1–3 scene synthesis and physics-escalation modules are in active development.
 
 ## Quick start
 
@@ -18,13 +18,27 @@ source scripts/env.sh
 make check-env
 ```
 
-3. Download the MVOIK-4D dataset into `data/MVOIK-4D/` (resumable):
+3. Download MVOIK-4D (`with_gt` first or full dataset, resumable):
 
 ```sh
-python scripts/download_mvoik4d.py
+python scripts/download_mvoik4d.py --no-proxy --workers 24 --allow-patterns "with_gt/**"
 ```
 
-4. Run code quality, documentation, and test checks:
+4. Inspect the 5-case cross-regime probe set and run the dual-axis smoke evaluation:
+
+```sh
+python -m real2sim_layered.cli probe-inspect
+python -m real2sim_layered.cli eval-smoke --out outputs/eval_smoke_probe.json
+```
+
+5. Serve local `Qwen/Qwen3.5-4B` (OpenAI-compatible) and extract structured Interaction Knowledge Graphs (`G_int`):
+
+```sh
+python scripts/serve_vlm.py --model Qwen/Qwen3.5-4B --device cuda:2 --port 8000 --no-proxy
+python -m real2sim_layered.cli extract-ikg --max-frames 6
+```
+
+6. Run code quality, documentation, and test checks:
 
 ```sh
 make check

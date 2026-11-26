@@ -7,8 +7,8 @@ Agreed near-term tasks for `real2sim-layered` (tier governance and task-line rul
 
 ## Active
 
-- [ ] Build MVOIK-4D dataset loader, 5-case cross-regime probe manifest, and dual-axis evaluator (multi-view RGBA/IoU/LPIPS + MuJoCo/Blender physical diagnostics) — verified by unit tests and a reproducible baseline report on the 5 probe cases.
-- [ ] Deploy local `Qwen3.5-4B-VL` OpenAI-compatible serving endpoint and implement unified VLM client with Pydantic structured output — verified by deterministic `G_int` extraction tests on the 5 probe cases.
+- [x] Build MVOIK-4D dataset loader, 5-case cross-regime probe manifest, and dual-axis evaluator (multi-view RGBA/IoU/LPIPS + MuJoCo/Blender physical diagnostics) — verified by unit tests and a reproducible baseline report on the 5 probe cases.
+- [x] Deploy local `Qwen3.5-4B-VL` OpenAI-compatible serving endpoint and implement unified VLM client with Pydantic structured output — verified by deterministic `G_int` extraction tests on the 5 probe cases.
 - [ ] Implement Layer-1 coarse Real2Sim baseline (`G_int -> S_0`) with pluggable `procedural_blender` and `sim_proxy` geometry backends — produces executable `.blend`/MJCF scenes and logs baseline scores under `.agents/records/`.
 
 ## Up next

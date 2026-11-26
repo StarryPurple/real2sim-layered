@@ -6,13 +6,13 @@
 .env.*
 !.env.example
 
-# Local virtual environment, caches, toolchains, datasets, and outputs
-.venv/
-cache/
-tools/
-data/
-outputs/
-tmp/
+# Local virtual environment, caches, toolchains, datasets, and outputs (root-anchored)
+/.venv/
+/cache/
+/tools/
+/data/
+/outputs/
+/tmp/
 
 # Python build and tool caches
 __pycache__/

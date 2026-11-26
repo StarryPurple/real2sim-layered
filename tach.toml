@@ -1,14 +1,38 @@
 source_roots = ["src"]
 exact = true
 exclude = [
-  "cache",
-  "data",
-  "outputs",
-  "tmp",
-  "tools",
-  ".venv",
+  "^cache/",
+  "^data/",
+  "^outputs/",
+  "^tmp/",
+  "^tools/",
+  "^\\.venv/",
 ]
 
 [[modules]]
 path = "real2sim_layered"
 depends_on = []
+
+[[modules]]
+path = "real2sim_layered.schemas"
+depends_on = []
+
+[[modules]]
+path = "real2sim_layered.tools"
+depends_on = ["real2sim_layered.schemas"]
+
+[[modules]]
+path = "real2sim_layered.sim"
+depends_on = ["real2sim_layered.schemas"]
+
+[[modules]]
+path = "real2sim_layered.eval"
+depends_on = ["real2sim_layered.schemas", "real2sim_layered.sim"]
+
+[[modules]]
+path = "real2sim_layered.cli"
+depends_on = [
+  "real2sim_layered.schemas",
+  "real2sim_layered.tools",
+  "real2sim_layered.eval",
+]
