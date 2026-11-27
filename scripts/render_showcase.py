@@ -68,9 +68,56 @@ def _load_font(size: int = 16, bold: bool = True) -> ImageFont.FreeTypeFont | Im
     return ImageFont.load_default()
 
 
-def _studio_mjcf_xml(scene: CoarseSceneSpec, show_hulls: bool = False) -> str:
-    """Wrap scene MJCF with warm parchment studio skybox and checkered physical ground plane."""
-    base_xml = build_mjcf_xml(scene, include_floor=show_hulls)
+def _attach_visual_overlays(xml: str, scene: CoarseSceneSpec) -> str:
+    """Make collision hulls transparent and overlay textured visual meshes on the same rigid bodies."""
+    for obj in scene.objects:
+        if not obj.visual_mesh_path or not Path(obj.visual_mesh_path).is_file():
+            continue
+        sid = obj.object_id
+        for idx in range(len(obj.collision_mesh_paths)):
+            tag = f'name="{sid}_col_{idx}_geom"'
+            start = xml.find(tag)
+            end = xml.find("/>", start) if start != -1 else -1
+            if end == -1:
+                continue
+            seg = xml[start:end]
+            rgba_pos = seg.find('rgba="')
+            if rgba_pos != -1:
+                rgba_end = seg.find('"', rgba_pos + 6)
+                xml = (
+                    xml[:start]
+                    + seg[:rgba_pos]
+                    + 'rgba="0 0 0 0"'
+                    + seg[rgba_end + 1 :]
+                    + xml[end:]
+                )
+        mat_attr = (
+            f'material="{sid}_mat"'
+            if obj.texture_path and Path(obj.texture_path).is_file()
+            else f'rgba="{" ".join(f"{v:.4f}" for v in obj.color_rgba)}"'
+        )
+        vis_geom = (
+            f'      <geom name="{sid}_vis_overlay" type="mesh" mesh="{sid}_vis_mesh" '
+            f'contype="0" conaffinity="0" mass="0.0001" {mat_attr}/>\n'
+        )
+        bpos = xml.find(f'<body name="{sid}"')
+        bend = xml.find("    </body>", bpos) if bpos != -1 else -1
+        if bend != -1:
+            xml = xml[:bend] + vis_geom + xml[bend:]
+    return xml
+
+
+def _studio_mjcf_xml(
+    scene: CoarseSceneSpec,
+    show_hulls: bool = False,
+    visual_with_physics: bool = False,
+) -> str:
+    """Wrap scene MJCF with warm parchment studio skybox and checkered physical ground plane.
+
+    When `visual_with_physics=True`, CoACD collision hulls drive contact dynamics invisibly
+    (`rgba="0 0 0 0"`) while the textured visual mesh is rendered on the same rigid body.
+    """
+    base_xml = build_mjcf_xml(scene, include_floor=show_hulls or visual_with_physics)
     studio_assets = (
         '    <texture name="studio_sky" type="skybox" builtin="gradient" '
         'rgb1="0.96 0.93 0.85" rgb2="0.88 0.83 0.72" width="128" height="128"/>\n'
@@ -91,6 +138,8 @@ def _studio_mjcf_xml(scene: CoarseSceneSpec, show_hulls: bool = False) -> str:
         'diffuse="0.9 0.9 0.9"',
         'ambient="0.38 0.38 0.38" diffuse="0.85 0.85 0.85"',
     )
+    if visual_with_physics:
+        xml = _attach_visual_overlays(xml, scene)
     if 'name="floor"' in xml:
         xml = xml.replace(
             'rgba="0.95 0.95 0.95 1"',
@@ -161,7 +210,7 @@ def _render_counterfactual_rollout(
     height: int = 300,
 ) -> list[np.ndarray]:
     """Render live MuJoCo physics rollout under small velocity perturbation."""
-    xml = _studio_mjcf_xml(scene, show_hulls=True)
+    xml = _studio_mjcf_xml(scene, show_hulls=False, visual_with_physics=True)
     model = load_mjcf_model(xml)
     data = new_mj_data(model)
     if model.nv > 0:
@@ -223,6 +272,7 @@ def _save_mp4(path: Path, frames: list[np.ndarray], fps: int = 12) -> None:
         quality=8,
         pixelformat="yuv420p",
         macro_block_size=1,
+        ffmpeg_params=["-movflags", "+faststart", "-profile:v", "main", "-level", "4.0"],
     ) as raw_writer:
         writer = cast(Any, raw_writer)
         for fr in frames:
@@ -232,6 +282,16 @@ def _save_mp4(path: Path, frames: list[np.ndarray], fps: int = 12) -> None:
 def _load_report_index(path: Path) -> dict[tuple[str, str], dict[str, Any]]:
     rows = json.loads(path.read_text(encoding="utf-8"))
     return {(r["case_id"], r["method_tag"]): r for r in rows}
+
+
+def _load_image_to_3d_reports() -> dict[tuple[str, str], dict[str, Any]]:
+    """Load image_to_3d_sim reports, overlaying fresher showcase3 Hunyuan3D metrics if newer."""
+    main_path = Path("outputs/ablation_all30_image_to_3d_sim/reports.json")
+    idx = _load_report_index(main_path)
+    showcase_path = Path("outputs/ablation_showcase3_hy3d/reports.json")
+    if showcase_path.is_file() and showcase_path.stat().st_mtime > main_path.stat().st_mtime:
+        idx.update(_load_report_index(showcase_path))
+    return idx
 
 
 def _smooth_scene_for_video(scene: CoarseSceneSpec) -> CoarseSceneSpec:
@@ -268,7 +328,7 @@ def _smooth_scene_for_video(scene: CoarseSceneSpec) -> CoarseSceneSpec:
 
 def _render_layering_videos(out_dir: Path, dataset_root: Path) -> None:
     rep_sim = _load_report_index(Path("outputs/ablation_all30_sim_proxy/reports.json"))
-    rep_3d = _load_report_index(Path("outputs/ablation_all30_image_to_3d_sim/reports.json"))
+    rep_3d = _load_image_to_3d_reports()
     tile_w, tile_h = 300, 225
 
     for cid, _, _ in SHOWCASE_CASES:
@@ -356,10 +416,10 @@ def _render_layering_videos(out_dir: Path, dataset_root: Path) -> None:
 def _render_h3_backend_videos(out_dir: Path, dataset_root: Path) -> None:
     rep_sim = _load_report_index(Path("outputs/ablation_all30_sim_proxy/reports.json"))
     rep_bl = _load_report_index(Path("outputs/ablation_all30_procedural_blender/reports.json"))
-    rep_3d = _load_report_index(Path("outputs/ablation_all30_image_to_3d_sim/reports.json"))
+    rep_3d = _load_image_to_3d_reports()
     tile_w, tile_h = 300, 225
 
-    for cid in ("0000_cut_apple_1", "0004_brick_fall_1"):
+    for cid in ("0000_cut_apple_1", "0016_press_toy_1", "0004_brick_fall_1"):
         case = load_case(dataset_root, cid)
         n_frames = 24
         fids = [
@@ -424,8 +484,9 @@ def _render_h3_backend_videos(out_dir: Path, dataset_root: Path) -> None:
 
 def _render_counterfactual_videos(out_dir: Path) -> None:
     for cid, backend_dir, label_b in (
-        ("0004_brick_fall_1", "outputs/ablation_all30_image_to_3d_sim", "Hunyuan3D + CoACD"),
+        ("0016_press_toy_1", "outputs/ablation_all30_image_to_3d_sim", "Hunyuan3D + CoACD"),
         ("0000_cut_apple_1", "outputs/ablation_all30_image_to_3d_sim", "Hunyuan3D + CoACD"),
+        ("0004_brick_fall_1", "outputs/ablation_all30_image_to_3d_sim", "Hunyuan3D + CoACD"),
     ):
         s_l1 = CoarseSceneSpec.model_validate_json(
             (Path(backend_dir) / "L1_only" / cid / "scene_spec.json").read_text(encoding="utf-8")
