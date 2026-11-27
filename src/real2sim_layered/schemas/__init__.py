@@ -9,7 +9,7 @@ from real2sim_layered.schemas.config import (
     load_hf_token,
     resolve_blender_bin,
     resolve_geom3d_device,
-    resolve_triposr_dir,
+    resolve_hunyuan3d_dir,
 )
 from real2sim_layered.schemas.models import (
     AnomalyReport,
@@ -67,5 +67,5 @@ __all__ = [
     "load_hf_token",
     "resolve_blender_bin",
     "resolve_geom3d_device",
-    "resolve_triposr_dir",
+    "resolve_hunyuan3d_dir",
 ]

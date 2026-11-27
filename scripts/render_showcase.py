@@ -341,7 +341,7 @@ def _render_layering_videos(out_dir: Path, dataset_root: Path) -> None:
                 ),
                 _label_tile(
                     f_3d[i],
-                    "Ours | TripoSR 3D",
+                    "Ours | Hunyuan3D 360",
                     _sub(rep_3d, "L1_L2_L3_full"),
                 ),
             ]
@@ -407,7 +407,7 @@ def _render_h3_backend_videos(out_dir: Path, dataset_root: Path) -> None:
                 ),
                 _label_tile(
                     vis3d_frames[i],
-                    "image_to_3d_sim (TripoSR UV)",
+                    "image_to_3d_sim (Hunyuan3D)",
                     f"PSNR {r_3d['visual']['mean_masked_psnr_db']:.1f}dB | Track {r_3d['physics']['trajectory_tracking_err_m']:.3f}m",
                 ),
                 _label_tile(
@@ -424,8 +424,8 @@ def _render_h3_backend_videos(out_dir: Path, dataset_root: Path) -> None:
 
 def _render_counterfactual_videos(out_dir: Path) -> None:
     for cid, backend_dir, label_b in (
-        ("0004_brick_fall_1", "outputs/ablation_all30_image_to_3d_sim", "TripoSR 3D + CoACD"),
-        ("0000_cut_apple_1", "outputs/ablation_all30_image_to_3d_sim", "TripoSR 3D + CoACD"),
+        ("0004_brick_fall_1", "outputs/ablation_all30_image_to_3d_sim", "Hunyuan3D + CoACD"),
+        ("0000_cut_apple_1", "outputs/ablation_all30_image_to_3d_sim", "Hunyuan3D + CoACD"),
     ):
         s_l1 = CoarseSceneSpec.model_validate_json(
             (Path(backend_dir) / "L1_only" / cid / "scene_spec.json").read_text(encoding="utf-8")

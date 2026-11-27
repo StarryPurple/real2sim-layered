@@ -38,7 +38,7 @@ def test_decompose_and_export_mesh_runs_in_mujoco(tmp_path: Path) -> None:
         target_size_m=(0.07, 0.07, 0.07),
         out_dir=tmp_path / "assets",
         asset_id="apple_mesh",
-        align_triposr_frame=True,
+        align_yup_to_zup=True,
     )
     assert asset.visual_mesh_path.is_file()
     assert asset.texture_path.is_file()

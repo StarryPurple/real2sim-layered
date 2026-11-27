@@ -7,7 +7,7 @@ This document defines the repository ownership boundaries, declarative module la
 | Path | Owner / Responsibility | Current state |
 | :--- | :--- | :--- |
 | `src/real2sim_layered/schemas/` | Pure Pydantic domain contracts (`models`) and single-source config/env loader (`config`) | Operational (`tach`-checked) |
-| `src/real2sim_layered/tools/` | MVOIK-4D RGBA loader, 5-case probe manifest, OpenAI-compatible VLM client (`mvoik4d`, `vlm`), and TripoSR+CoACD mesh lifter (`image_to_3d`) | Operational (`tach`-checked) |
+| `src/real2sim_layered/tools/` | MVOIK-4D RGBA loader, 5-case probe manifest, OpenAI-compatible VLM client (`mvoik4d`, `vlm`), and Hunyuan3D-2mini-turbo+CoACD mesh lifter (`image_to_3d`) | Operational (`tach`-checked) |
 | `src/real2sim_layered/sim/` | MuJoCo MJCF compiler & diagnostics (`_mujoco`, `diagnostics`, `mujoco_builder`) and headless Blender 4.2 worker (`blender_builder`, `blender_worker`) | Operational (`tach`-checked) |
 | `src/real2sim_layered/eval/` | Dual-axis visual + physical evaluation and Markdown/JSON reporting (`metrics`) | Operational (`tach`-checked) |
 | `src/real2sim_layered/agent/` | Layer-1 synthesis (`layer1`), Layer-2 local physics escalation (`layer2`), Layer-3 anomaly fallback (`layer3`) | Operational (`tach`-checked) |
@@ -34,7 +34,7 @@ Do not create empty placeholder subpackages ahead of real implementation. Add ea
 
 ## Golden principles and domain invariants
 
-1. **Deterministic runtime activation**: GPU PyTorch, headless MuJoCo (`MUJOCO_GL=egl`), bundled Blender 4.2 (`tools/blender-4.2.9-linux-x64` plus `tools/syslibs`), and upstream TripoSR sources (`tools/TripoSR`, shimmed with `scikit-image` marching cubes) are activated through `source scripts/env.sh`. Never hardcode machine-local paths inside `src/real2sim_layered/`.
+1. **Deterministic runtime activation**: GPU PyTorch, headless MuJoCo (`MUJOCO_GL=egl`), bundled Blender 4.2 (`tools/blender-4.2.9-linux-x64` plus `tools/syslibs`), and upstream Hunyuan3D-2 sources (`tools/Hunyuan3D-2`, shimmed for `transformers` v5) are activated through `source scripts/env.sh`. Never hardcode machine-local paths inside `src/real2sim_layered/`.
 2. **Single-source configuration and secrets**: load API keys, `.env`, proxy overrides, and external binary paths through `real2sim_layered.schemas.config` (`.env*` is gitignored); `ast-grep` bans scattered `os.environ`/`os.getenv` calls across `src/real2sim_layered/`.
 3. **Explicit edge contracts**: validate external inputs (VLM outputs, dataset manifests, simulation parameters) once at module boundaries via Pydantic schemas. `ast-grep` bans silent `except ...: pass` swallowing.
 4. **Suppression hygiene**: every `# noqa`, `# pyright: ignore`, or `# shellcheck disable=` directive must include a concrete inline reason; eliminate root causes before adding suppressions (`ruff` `RUF100` enforces zero stale suppressions).

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from real2sim_layered.tools.image_to_3d import (
+    Hunyuan3DMeshLifter,
     ImageTo3DAsset,
-    TripoSRMeshLifter,
     decompose_and_export_mesh,
     get_default_mesh_lifter,
 )
@@ -21,9 +21,9 @@ from real2sim_layered.tools.vlm import OpenAICompatVlmClient, VlmExtractionResul
 
 __all__ = [
     "DEFAULT_PROBE_MANIFEST",
+    "Hunyuan3DMeshLifter",
     "ImageTo3DAsset",
     "OpenAICompatVlmClient",
-    "TripoSRMeshLifter",
     "VlmExtractionResult",
     "decompose_and_export_mesh",
     "get_default_mesh_lifter",

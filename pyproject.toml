@@ -39,9 +39,11 @@ vlm = [
 ]
 geom3d = [
     "coacd>=1.0.0",
+    "diffusers>=0.32.0",
     "scikit-image>=0.24.0",
     "einops>=0.8.0",
     "omegaconf>=2.3.0",
+    "timm>=1.0.0",
 ]
 
 [tool.uv.sources]
@@ -139,8 +141,18 @@ extend_exclude = [
 ]
 
 [tool.deptry.per_rule_ignores]
-# transformers/TripoSR runtime plugins and reserved Layer 2-3 media/vision deps
-DEP002 = ["accelerate", "qwen-vl-utils", "einops", "torchvision", "imageio", "pyyaml", "matplotlib"]
+# transformers/Hunyuan3D runtime plugins and reserved Layer 2-3 media/vision deps
+DEP002 = [
+    "accelerate",
+    "diffusers",
+    "einops",
+    "omegaconf",
+    "qwen-vl-utils",
+    "scikit-image",
+    "timm",
+    "torchvision",
+    "pyyaml",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

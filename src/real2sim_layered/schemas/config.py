@@ -65,15 +65,15 @@ def resolve_blender_bin(configured: str | None = None) -> str:
     return blender_bin
 
 
-def resolve_triposr_dir(configured: Path | None = None) -> Path:
-    """Resolve the local TripoSR repository directory from config, TRIPOSR_DIR, or workspace."""
+def resolve_hunyuan3d_dir(configured: Path | None = None) -> Path:
+    """Resolve the local Hunyuan3D-2 repository directory from config, HUNYUAN3D_DIR, or workspace."""
     if configured is not None:
         return configured.resolve()
-    env_dir = os.environ.get("TRIPOSR_DIR")
+    env_dir = os.environ.get("HUNYUAN3D_DIR")
     if env_dir and env_dir.strip():
         return Path(env_dir.strip()).resolve()
     root = Path(os.environ.get("REAL2SIM_ROOT", ".")).resolve()
-    return (root / "tools" / "TripoSR").resolve()
+    return (root / "tools" / "Hunyuan3D-2").resolve()
 
 
 def resolve_geom3d_device() -> str:
