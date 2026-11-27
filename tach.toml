@@ -7,6 +7,7 @@ exclude = [
   "^tmp/",
   "^tools/",
   "^\\.venv/",
+  "^src/real2sim_layered/sim/blender_worker\\.py$",
 ]
 
 [[modules]]

@@ -19,23 +19,7 @@ from PIL import Image
 from pydantic import BaseModel
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
-
-def _load_hf_token(env_file: Path) -> str | None:
-    token = os.environ.get("HF_TOKEN")
-    if token:
-        return token.strip()
-    if not env_file.is_file():
-        return None
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, val = line.split("=", 1)
-        if key.strip() == "HF_TOKEN":
-            cleaned = val.strip().strip('"').strip("'")
-            if cleaned:
-                return cleaned
-    return None
+from real2sim_layered.schemas import clear_proxy_env, load_hf_token
 
 
 def _decode_image_url(url: str) -> Image.Image:
@@ -189,23 +173,14 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.no_proxy:
-        for key in (
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "ALL_PROXY",
-            "http_proxy",
-            "https_proxy",
-            "all_proxy",
-        ):
-            os.environ.pop(key, None)
+        clear_proxy_env()
 
     root = Path(os.environ.get("REAL2SIM_ROOT", ".")).resolve()
-    token = _load_hf_token(root / ".env")
     app = build_app(
         model_id=args.model,
         device=args.device,
         enable_thinking=args.enable_thinking,
-        token=token,
+        token=load_hf_token(root / ".env"),
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 

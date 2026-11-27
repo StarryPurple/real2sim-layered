@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
+
+from real2sim_layered.schemas import resolve_blender_bin
+from real2sim_layered.sim._mujoco import load_mjcf_model, mj_step, new_mj_data
 
 
 def check_torch_gpu() -> None:
@@ -52,10 +54,10 @@ def check_python_stack() -> None:
       </worldbody>
     </mujoco>
     """
-    model = mujoco.MjModel.from_xml_string(xml)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
-    data = mujoco.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
+    model = load_mjcf_model(xml)
+    data = new_mj_data(model)
     for _ in range(500):
-        mujoco.mj_step(model, data)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
+        mj_step(model, data)
     qpos = float(data.qpos[0])
     assert -0.04 < qpos < -0.02, f"Unexpected spring equilibrium: {qpos}"
 
@@ -63,13 +65,13 @@ def check_python_stack() -> None:
     renderer.update_scene(data)
     img = renderer.render()
     renderer.close()
-    assert img.shape == (120, 160, 3) and np.std(img) > 1.0, "Blank MuJoCo render"
+    assert img.shape == (120, 160, 3), f"Unexpected MuJoCo render shape: {img.shape}"
+    assert np.std(img) > 1.0, "Blank MuJoCo render"
     print(f"MuJoCo spring-mass + offscreen render OK: qpos={qpos:.4f} m, img={img.shape}")
 
 
 def check_blender() -> None:
-    blender = os.environ.get("BLENDER_BIN") or shutil.which("blender")
-    assert blender, "BLENDER_BIN not set and blender not in PATH"
+    blender = resolve_blender_bin()
     res = subprocess.run(
         [
             blender,

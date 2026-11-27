@@ -1,0 +1,12 @@
+id: no-scattered-environ
+language: python
+severity: error
+message: "Read environment variables through real2sim_layered.schemas.config instead of calling os.environ/os.getenv directly inside src/."
+files:
+  - src/real2sim_layered/**/*.py
+ignores:
+  - src/real2sim_layered/schemas/config.py
+rule:
+  any:
+    - pattern: os.environ
+    - pattern: os.getenv($$$)

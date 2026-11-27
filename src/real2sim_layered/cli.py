@@ -7,6 +7,8 @@ import json
 import time
 from pathlib import Path
 
+import numpy as np
+
 from real2sim_layered.agent import materialize_layer1_scene, synthesize_coarse_scene
 from real2sim_layered.eval import evaluate_case_dual_axis, format_reports_markdown
 from real2sim_layered.schemas import (
@@ -38,11 +40,51 @@ _SMOKE_MJCF = """
 """
 
 
-def _cmd_probe_inspect(cfg: RuntimeConfig) -> None:
+def _select_probe_cases(cfg: RuntimeConfig, case_ids: list[str] | None = None) -> list[MvoikCase]:
     cases = load_probe_cases(cfg.dataset_root)
-    for case in cases:
+    if not case_ids:
+        return cases
+    wanted = set(case_ids)
+    return [c for c in cases if c.case_id in wanted]
+
+
+def _load_gt_views(
+    case: MvoikCase,
+    indices: list[int],
+    target_size: tuple[int, int] = (160, 120),
+) -> dict[str, list[np.ndarray]]:
+    return {
+        view_name: [
+            load_rgba_frame(frames[idx], target_size=target_size)
+            for idx in indices
+            if idx < len(frames)
+        ]
+        for view_name, frames in sorted(case.eval_views.items())
+    }
+
+
+def _emit_reports(
+    reports: list[DualAxisReport],
+    json_path: Path | None = None,
+    md_path: Path | None = None,
+) -> None:
+    md = format_reports_markdown(reports)
+    print(md)
+    if json_path is not None:
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(
+            json.dumps([r.model_dump(mode="json") for r in reports], indent=2) + "\n",
+            encoding="utf-8",
+        )
+    if md_path is not None:
+        md_path.parent.mkdir(parents=True, exist_ok=True)
+        md_path.write_text(md + "\n", encoding="utf-8")
+
+
+def _cmd_probe_inspect(cfg: RuntimeConfig) -> None:
+    for case in _select_probe_cases(cfg):
         views = sorted(case.eval_views.keys())
-        print(  # noqa: T201  # CLI subcommand prints tabular report to stdout
+        print(
             f"{case.case_id:32s} regime={case.regime:20s} "
             f"frames={case.num_frames:3d} size={case.width}x{case.height} views={views}"
         )
@@ -50,38 +92,23 @@ def _cmd_probe_inspect(cfg: RuntimeConfig) -> None:
 
 def _cmd_eval_smoke(cfg: RuntimeConfig, out_path: Path | None) -> None:
     """Run an identity/upper-bound visual + MuJoCo physics smoke check on the 5 probe cases."""
-    cases = load_probe_cases(cfg.dataset_root)
     reports: list[DualAxisReport] = []
-    for case in cases:
+    for case in _select_probe_cases(cfg):
         t0 = time.perf_counter()
         indices = sample_frame_indices(case.num_frames, max_frames=4)
-        gt_by_view = {
-            view_name: [
-                load_rgba_frame(frames[idx], target_size=(160, 120))
-                for idx in indices
-                if idx < len(frames)
-            ]
-            for view_name, frames in case.eval_views.items()
-        }
-        report = evaluate_case_dual_axis(
-            case=case,
-            method_tag="smoke_oracle_check",
-            pred_by_view=gt_by_view,
-            gt_by_view=gt_by_view,
-            mjcf_xml=_SMOKE_MJCF,
-            physics_steps=120,
-            wall_time_s=time.perf_counter() - t0,
+        gt_by_view = _load_gt_views(case, indices)
+        reports.append(
+            evaluate_case_dual_axis(
+                case=case,
+                method_tag="smoke_oracle_check",
+                pred_by_view=gt_by_view,
+                gt_by_view=gt_by_view,
+                mjcf_xml=_SMOKE_MJCF,
+                physics_steps=120,
+                wall_time_s=time.perf_counter() - t0,
+            )
         )
-        reports.append(report)
-
-    md = format_reports_markdown(reports)
-    print(md)  # noqa: T201  # CLI subcommand prints evaluation table to stdout
-    if out_path is not None:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(
-            json.dumps([r.model_dump(mode="json") for r in reports], indent=2) + "\n",
-            encoding="utf-8",
-        )
+    _emit_reports(reports, json_path=out_path)
 
 
 def _cmd_extract_ikg(
@@ -90,25 +117,20 @@ def _cmd_extract_ikg(
     max_frames: int,
     out_dir: Path | None,
 ) -> None:
-    cases = load_probe_cases(cfg.dataset_root)
-    if case_ids:
-        wanted = set(case_ids)
-        cases = [c for c in cases if c.case_id in wanted]
     client = OpenAICompatVlmClient(cfg.vlm)
     dest = out_dir or (cfg.outputs_root / "ikg_probe")
     dest.mkdir(parents=True, exist_ok=True)
 
-    for case in cases:
+    for case in _select_probe_cases(cfg, case_ids):
         t0 = time.perf_counter()
         result = client.extract_ikg(case, max_frames=max_frames)
-        elapsed = time.perf_counter() - t0
         out_file = dest / f"{case.case_id}.json"
         out_file.write_text(result.graph.model_dump_json(indent=2) + "\n", encoding="utf-8")
-        print(  # noqa: T201  # CLI subcommand prints extraction status to stdout
+        print(
             f"[OK] {case.case_id} -> regime={result.graph.dominant_regime} "
             f"(gt={case.regime}) objects={len(result.graph.objects)} "
             f"intervals={len(result.graph.intervals)} tokens={result.total_tokens} "
-            f"time={elapsed:.1f}s saved={out_file}"
+            f"time={time.perf_counter() - t0:.1f}s saved={out_file}"
         )
 
 
@@ -122,8 +144,7 @@ def _load_or_extract_ikg(
         cached = ikg_dir / f"{case.case_id}.json"
         if cached.is_file():
             return InteractionGraph.model_validate_json(cached.read_text(encoding="utf-8")), 0
-    client = OpenAICompatVlmClient(cfg.vlm)
-    result = client.extract_ikg(case, max_frames=max_frames)
+    result = OpenAICompatVlmClient(cfg.vlm).extract_ikg(case, max_frames=max_frames)
     if ikg_dir is not None:
         ikg_dir.mkdir(parents=True, exist_ok=True)
         (ikg_dir / f"{case.case_id}.json").write_text(
@@ -140,11 +161,6 @@ def _cmd_run_layer1(
     max_frames: int,
     case_ids: list[str] | None,
 ) -> None:
-    cases = load_probe_cases(cfg.dataset_root)
-    if case_ids:
-        wanted = set(case_ids)
-        cases = [c for c in cases if c.case_id in wanted]
-
     backends = (
         [AssetBackend.SIM_PROXY, AssetBackend.PROCEDURAL_BLENDER]
         if backend_arg == "both"
@@ -152,20 +168,13 @@ def _cmd_run_layer1(
     )
 
     reports: list[DualAxisReport] = []
-    for case in cases:
+    for case in _select_probe_cases(cfg, case_ids):
         ikg, tokens_used = _load_or_extract_ikg(
             case, cfg=cfg, ikg_dir=ikg_dir, max_frames=max_frames
         )
         eval_indices = sample_frame_indices(case.num_frames, max_frames=max_frames)
-        eval_views = sorted(case.eval_views.keys())
-        gt_by_view = {
-            view_name: [
-                load_rgba_frame(case.eval_views[view_name][idx], target_size=(160, 120))
-                for idx in eval_indices
-                if idx < len(case.eval_views[view_name])
-            ]
-            for view_name in eval_views
-        }
+        gt_by_view = _load_gt_views(case, eval_indices)
+        eval_views = list(gt_by_view.keys())
 
         for backend in backends:
             t0 = time.perf_counter()
@@ -180,26 +189,20 @@ def _cmd_run_layer1(
                 width=160,
                 height=120,
             )
-            report = evaluate_case_dual_axis(
-                case=case,
-                method_tag=f"L1_{backend.value}",
-                pred_by_view=artifacts.rendered_by_view,
-                gt_by_view=gt_by_view,
-                mjcf_xml=artifacts.mjcf_xml,
-                physics_steps=200,
-                wall_time_s=time.perf_counter() - t0,
-                vlm_tokens_used=tokens_used,
+            reports.append(
+                evaluate_case_dual_axis(
+                    case=case,
+                    method_tag=f"L1_{backend.value}",
+                    pred_by_view=artifacts.rendered_by_view,
+                    gt_by_view=gt_by_view,
+                    mjcf_xml=artifacts.mjcf_xml,
+                    physics_steps=200,
+                    wall_time_s=time.perf_counter() - t0,
+                    vlm_tokens_used=tokens_used,
+                )
             )
-            reports.append(report)
 
-    md = format_reports_markdown(reports)
-    print(md)  # noqa: T201  # CLI subcommand prints evaluation table to stdout
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "reports.json").write_text(
-        json.dumps([r.model_dump(mode="json") for r in reports], indent=2) + "\n",
-        encoding="utf-8",
-    )
-    (out_dir / "reports.md").write_text(md + "\n", encoding="utf-8")
+    _emit_reports(reports, json_path=out_dir / "reports.json", md_path=out_dir / "reports.md")
 
 
 def main(argv: list[str] | None = None) -> None:

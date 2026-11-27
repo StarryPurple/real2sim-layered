@@ -10,7 +10,7 @@ from real2sim_layered.eval import (
     format_reports_markdown,
 )
 from real2sim_layered.schemas import DualAxisReport, PhysicalRegime
-from real2sim_layered.sim import evaluate_mujoco_scene, render_mujoco_rgba_sequence
+from real2sim_layered.sim import evaluate_mujoco_scene
 
 _STABLE_BLOCK_XML = """
 <mujoco>
@@ -74,13 +74,6 @@ def test_mujoco_diagnostics_distinguish_stable_vs_floating() -> None:
     floating = evaluate_mujoco_scene(_FLOATING_ZERO_G_XML, num_steps=80)
     assert floating.floating_frame_ratio > 0.9
     assert any("floating" in note.lower() for note in floating.notes)
-
-
-def test_mujoco_offscreen_rgba_render() -> None:
-    frames = render_mujoco_rgba_sequence(_STABLE_BLOCK_XML, num_frames=3, width=80, height=60)
-    assert len(frames) == 3
-    assert frames[0].shape == (60, 80, 4)
-    assert float(frames[0][..., 3].mean()) > 0.0
 
 
 def test_format_reports_markdown() -> None:

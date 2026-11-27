@@ -33,8 +33,10 @@ def test_compute_union_alpha_bbox_crops_tightly(tmp_path: Path) -> None:
     bbox = compute_union_alpha_bbox([p], pad_ratio=0.1)
     assert bbox is not None
     x0, y0, x1, y1 = bbox
-    assert 70 <= x0 <= 80 and 120 <= x1 <= 130
-    assert 35 <= y0 <= 40 and 60 <= y1 <= 65
+    assert 70 <= x0 <= 80
+    assert 120 <= x1 <= 130
+    assert 35 <= y0 <= 40
+    assert 60 <= y1 <= 65
 
 
 def test_extract_json_payload_handles_think_and_fences() -> None:
@@ -67,6 +69,16 @@ class _FakeCompletions:
             choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
             usage=SimpleNamespace(prompt_tokens=100, completion_tokens=50),
         )
+
+
+class _FakeChat:
+    def __init__(self, completions: _FakeCompletions) -> None:
+        self.completions = completions
+
+
+class _FakeClient:
+    def __init__(self, completions: _FakeCompletions) -> None:
+        self.chat = _FakeChat(completions)
 
 
 def test_vlm_client_retries_and_validates_ikg(tmp_path: Path) -> None:
@@ -119,8 +131,7 @@ def test_vlm_client_retries_and_validates_ikg(tmp_path: Path) -> None:
     )
 
     fake_completions = _FakeCompletions(["not valid json", valid_json])
-    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=fake_completions))
-    vlm = OpenAICompatVlmClient(VlmConfig(), client=fake_client)  # pyright: ignore[reportArgumentType]  # test double
+    vlm = OpenAICompatVlmClient(VlmConfig(), client=_FakeClient(fake_completions))
 
     result = vlm.extract_ikg(case, max_frames=1, max_attempts=2)
     assert fake_completions.calls == 2

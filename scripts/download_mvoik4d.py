@@ -9,39 +9,7 @@ from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
-PROXY_ENV_KEYS = (
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-)
-
-
-def load_hf_token(env_file: Path) -> str | None:
-    """Load HF_TOKEN from environment or a local .env file without echoing it."""
-    token = os.environ.get("HF_TOKEN")
-    if token:
-        return token.strip()
-    if not env_file.is_file():
-        return None
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, val = line.split("=", 1)
-        if key.strip() == "HF_TOKEN":
-            cleaned = val.strip().strip('"').strip("'")
-            if cleaned:
-                return cleaned
-    return None
-
-
-def clear_proxy_env() -> None:
-    """Remove proxy environment variables so requests connect directly."""
-    for key in PROXY_ENV_KEYS:
-        os.environ.pop(key, None)
+from real2sim_layered.schemas import clear_proxy_env, load_hf_token
 
 
 def main() -> None:

@@ -34,7 +34,14 @@ _MATERIAL_PRIORS: dict[str, tuple[float, float]] = {
     "fluid": (0.20, 0.15),
 }
 
-_VALID_PRIMITIVES: set[str] = {"box", "sphere", "cylinder", "capsule"}
+_PRIMITIVE_MAP: dict[str, PrimitiveKind] = {
+    "box": "box",
+    "sphere": "sphere",
+    "cylinder": "cylinder",
+    "capsule": "capsule",
+}
+
+_RegionStats = tuple[float, float, float, float, RgbaColor]
 
 
 def build_canonical_cameras(
@@ -50,20 +57,21 @@ def build_canonical_cameras(
         ("eval_2", 180.0, 12.0),
         ("eval_3", 45.0, 58.0),
     ]
-    cameras: list[CameraSpec] = []
     tx, ty, tz = target
+    cameras: list[CameraSpec] = []
     for name, az_deg, el_deg in specs:
         az = math.radians(az_deg)
         el = math.radians(el_deg)
         horiz = distance * math.cos(el)
         # Azimuth 0 places camera on -Y looking toward +Y.
-        cx = tx + horiz * math.sin(az)
-        cy = ty - horiz * math.cos(az)
-        cz = tz + distance * math.sin(el)
         cameras.append(
             CameraSpec(
                 name=name,
-                position=(cx, cy, cz),
+                position=(
+                    tx + horiz * math.sin(az),
+                    ty - horiz * math.cos(az),
+                    tz + distance * math.sin(el),
+                ),
                 target=target,
                 fov_y_deg=fov_y_deg,
             )
@@ -71,95 +79,65 @@ def build_canonical_cameras(
     return cameras
 
 
-def _normalize_primitive(raw: str) -> PrimitiveKind:
-    lower = raw.strip().lower()
-    if lower in _VALID_PRIMITIVES:
-        return lower  # pyright: ignore[reportReturnType]  # validated against _VALID_PRIMITIVES literal set
-    return "box"
-
-
-def _frame_foreground_stats(
+def _region_stats(
     rgba: np.ndarray,
-) -> tuple[float, float, float, float, RgbaColor]:
-    """Return normalized (cx, cy, bw, bh, median_rgba) from an (H, W, 4) float32 frame."""
+    xs: np.ndarray,
+    ys: np.ndarray,
+    min_box: float = 0.03,
+) -> _RegionStats:
+    """Compute normalized (cx, cy, bw, bh, median_rgba) for foreground pixel coordinates."""
     h, w, _ = rgba.shape
-    mask = rgba[..., 3] >= 0.5
-    if not np.any(mask):
-        return 0.5, 0.65, 0.18, 0.18, (0.5, 0.5, 0.5, 1.0)
-
-    ys, xs = np.nonzero(mask)
     cx = float(np.mean(xs)) / float(w)
     cy = float(np.mean(ys)) / float(h)
-    bw = max(0.04, float(xs.max() - xs.min() + 1) / float(w))
-    bh = max(0.04, float(ys.max() - ys.min() + 1) / float(h))
-    fg_rgb = rgba[mask, :3]
-    med = np.median(fg_rgb, axis=0)
-    color: RgbaColor = (float(med[0]), float(med[1]), float(med[2]), 1.0)
-    return cx, cy, bw, bh, color
+    bw = max(min_box, float(xs.max() - xs.min() + 1) / float(w))
+    bh = max(min_box, float(ys.max() - ys.min() + 1) / float(h))
+    med = np.median(rgba[ys, xs, :3], axis=0)
+    return cx, cy, bw, bh, (float(med[0]), float(med[1]), float(med[2]), 1.0)
 
 
-def _split_object_regions(
-    rgba: np.ndarray,
-    num_objects: int,
-) -> list[tuple[float, float, float, float, RgbaColor]]:
-    """Partition foreground pixels along horizontal bands when multiple objects are declared."""
-    if num_objects <= 1:
-        return [_frame_foreground_stats(rgba)]
-
-    h, w, _ = rgba.shape
+def _split_object_regions(rgba: np.ndarray, num_objects: int) -> list[_RegionStats]:
+    """Partition foreground pixels along horizontal quantile bands for `num_objects` entities."""
     mask = rgba[..., 3] >= 0.5
     if not np.any(mask):
+        if num_objects <= 1:
+            return [(0.5, 0.65, 0.18, 0.18, (0.5, 0.5, 0.5, 1.0))]
         return [
-            (0.35 + 0.3 * i / max(1, num_objects - 1), 0.65, 0.12, 0.12, (0.5, 0.5, 0.5, 1.0))
+            (0.35 + 0.3 * i / (num_objects - 1), 0.65, 0.12, 0.12, (0.5, 0.5, 0.5, 1.0))
             for i in range(num_objects)
         ]
 
     ys, xs = np.nonzero(mask)
-    quantiles = np.linspace(0.0, 1.0, num=num_objects + 1)
-    x_edges = np.quantile(xs, quantiles)
-    regions: list[tuple[float, float, float, float, RgbaColor]] = []
+    whole = _region_stats(rgba, xs, ys, min_box=0.04)
+    if num_objects <= 1:
+        return [whole]
 
+    x_edges = np.quantile(xs, np.linspace(0.0, 1.0, num=num_objects + 1))
+    regions: list[_RegionStats] = []
     for idx in range(num_objects):
-        lo = float(x_edges[idx])
-        hi = float(x_edges[idx + 1])
-        sel = (xs >= lo) & (xs <= hi)
-        if not np.any(sel):
-            regions.append(_frame_foreground_stats(rgba))
-            continue
-        sub_x = xs[sel]
-        sub_y = ys[sel]
-        cx = float(np.mean(sub_x)) / float(w)
-        cy = float(np.mean(sub_y)) / float(h)
-        bw = max(0.03, float(sub_x.max() - sub_x.min() + 1) / float(w))
-        bh = max(0.03, float(sub_y.max() - sub_y.min() + 1) / float(h))
-        med = np.median(rgba[sub_y, sub_x, :3], axis=0)
-        regions.append((cx, cy, bw, bh, (float(med[0]), float(med[1]), float(med[2]), 1.0)))
+        sel = (xs >= float(x_edges[idx])) & (xs <= float(x_edges[idx + 1]))
+        regions.append(_region_stats(rgba, xs[sel], ys[sel]) if np.any(sel) else whole)
     return regions
 
 
 def _backproject_to_world(
-    cx_norm: float,
-    cy_norm: float,
-    bw_norm: float,
-    bh_norm: float,
+    region: tuple[float, float, float, float],
     depth_offset_m: float,
+    aspect: float = 4.0 / 3.0,
     fov_y_deg: float = 40.0,
     cam_distance: float = 1.15,
-    aspect: float = 4.0 / 3.0,
 ) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    """Back-project normalized 2D bbox into metric 3D (position, half_extents)."""
+    """Back-project normalized 2D bbox `(cx, cy, bw, bh)` into metric 3D `(pos, half_extents)`."""
+    cx_norm, cy_norm, bw_norm, bh_norm = region
     half_h_world = cam_distance * math.tan(math.radians(fov_y_deg) * 0.5)
     half_w_world = half_h_world * aspect
 
     wx = (cx_norm - 0.5) * 2.0 * half_w_world
     # Image y grows downward; map vertical image span into z around tabletop height.
     wz = max(0.04, (0.85 - cy_norm) * 2.0 * half_h_world)
-    wy = depth_offset_m
-
     hx = max(0.025, min(0.25, bw_norm * half_w_world * 0.9))
     hz = max(0.025, min(0.25, bh_norm * half_h_world * 0.9))
     hy = max(0.025, min(0.20, 0.5 * (hx + hz)))
-    return (wx, wy, wz), (hx, hy, hz)
+    return (wx, depth_offset_m, wz), (hx, hy, hz)
 
 
 def synthesize_coarse_scene(
@@ -179,11 +157,12 @@ def synthesize_coarse_scene(
 
     for frame_idx in frame_indices:
         rgba = load_rgba_frame(case.input_frames[frame_idx], target_size=(160, 120))
-        regions = _split_object_regions(rgba, num_objects=num_objs)
-        for obj_i, (cx, cy, bw, bh, color) in enumerate(regions):
+        for obj_i, (cx, cy, bw, bh, color) in enumerate(
+            _split_object_regions(rgba, num_objects=num_objs)
+        ):
             depth_offset = (obj_i - 0.5 * (num_objs - 1)) * 0.04
             pos, half_ext = _backproject_to_world(
-                cx, cy, bw, bh, depth_offset_m=depth_offset, aspect=aspect
+                (cx, cy, bw, bh), depth_offset_m=depth_offset, aspect=aspect
             )
             per_obj_kfs[obj_i].append(KeyframePose(frame_idx=frame_idx, position=pos))
             per_obj_sizes[obj_i].append(half_ext)
@@ -198,7 +177,7 @@ def synthesize_coarse_scene(
             SceneObjectSpec(
                 object_id=entity.object_id,
                 label=entity.label,
-                primitive=_normalize_primitive(entity.primitive_proxy),
+                primitive=_PRIMITIVE_MAP.get(entity.primitive_proxy.strip().lower(), "box"),
                 size_m=(float(size_arr[0]), float(size_arr[1]), float(size_arr[2])),
                 color_rgba=(float(color_arr[0]), float(color_arr[1]), float(color_arr[2]), 1.0),
                 mass_kg=mass,
@@ -235,7 +214,6 @@ class Layer1Artifacts:
     spec_path: Path
     mjcf_xml: str
     mjcf_path: Path
-    blender_script_path: Path | None
     blend_path: Path | None
     rendered_by_view: dict[str, list[np.ndarray]]
 
@@ -258,11 +236,9 @@ def materialize_layer1_scene(
     mjcf_path = out_dir / "scene.xml"
     mjcf_path.write_text(mjcf_xml, encoding="utf-8")
 
-    blender_script_path: Path | None = None
     blend_path: Path | None = None
-
     if scene.backend == AssetBackend.PROCEDURAL_BLENDER:
-        blender_script_path, blend_path, rendered = run_blender_scene(
+        blend_path, rendered = run_blender_scene(
             scene=scene,
             frame_indices=frame_indices,
             views=views,
@@ -285,7 +261,6 @@ def materialize_layer1_scene(
         spec_path=spec_path,
         mjcf_xml=mjcf_xml,
         mjcf_path=mjcf_path,
-        blender_script_path=blender_script_path,
         blend_path=blend_path,
         rendered_by_view=rendered,
     )

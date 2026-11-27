@@ -1,23 +1,21 @@
-"""Deterministic MuJoCo physical diagnostics and offscreen RGBA silhouette rendering."""
+"""Deterministic MuJoCo physical diagnostics."""
 
 from __future__ import annotations
 
 import math
+from typing import Any
 
-import mujoco
 import numpy as np
 
 from real2sim_layered.schemas import PhysicsMetrics
+from real2sim_layered.sim._mujoco import load_mjcf_model, mj_step, new_mj_data
 
 _POSITION_BOUND_M = 20.0
 _FLOATING_HEIGHT_M = 0.03
 _FLOATING_SPEED_MPS = 0.05
 
 
-def _bodies_within_bounds(
-    data: mujoco.MjData,  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
-    dynamic_body_ids: list[int],
-) -> int | None:
+def _bodies_within_bounds(data: Any, dynamic_body_ids: list[int]) -> int | None:
     """Return the first body ID outside scene bounds, or None if all are within bounds."""
     for body_id in dynamic_body_ids:
         if float(np.linalg.norm(data.xpos[body_id])) > _POSITION_BOUND_M:
@@ -25,9 +23,7 @@ def _bodies_within_bounds(
     return None
 
 
-def _step_max_penetration(
-    data: mujoco.MjData,  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
-) -> float:
+def _step_max_penetration(data: Any) -> float:
     """Return maximum penetration depth (m) across active contacts in the current step."""
     max_pen = 0.0
     for c_idx in range(int(data.ncon)):
@@ -38,12 +34,12 @@ def _step_max_penetration(
 
 
 def _step_and_collect(
-    model: mujoco.MjModel,  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
+    model: Any,
     num_steps: int,
     perturb_vel: float = 0.0,
 ) -> tuple[bool, bool, float, float, float, list[str]]:
     """Run MuJoCo rollout and return stability, permanence, penetration, floating, settling, notes."""
-    data = mujoco.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
+    data = new_mj_data(model)
     if perturb_vel != 0.0 and model.nv > 0:
         data.qvel[:] = perturb_vel
 
@@ -59,7 +55,7 @@ def _step_and_collect(
     vel_norms: list[float] = []
 
     for step in range(num_steps):
-        mujoco.mj_step(model, data)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
+        mj_step(model, data)
         if not (np.all(np.isfinite(data.qpos)) and np.all(np.isfinite(data.qvel))):
             finite_ok = False
             notes.append(f"Non-finite state detected at step {step}")
@@ -105,7 +101,7 @@ def evaluate_mujoco_scene(
     counterfactual_perturb_vel: float = 0.05,
 ) -> PhysicsMetrics:
     """Deterministically verify a MuJoCo MJCF scene and run a counterfactual perturbation check."""
-    model = mujoco.MjModel.from_xml_string(mjcf_xml)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
+    model = load_mjcf_model(mjcf_xml)
     finite_ok, bounds_ok, max_pen, float_ratio, stability, notes = _step_and_collect(
         model, num_steps=num_steps, perturb_vel=0.0
     )
@@ -127,44 +123,3 @@ def evaluate_mujoco_scene(
         counterfactual_survival=counterfactual_ok,
         notes=notes,
     )
-
-
-def render_mujoco_rgba_sequence(
-    mjcf_xml: str,
-    num_frames: int = 8,
-    steps_per_frame: int = 10,
-    width: int = 320,
-    height: int = 240,
-    camera: str | int = -1,
-) -> list[np.ndarray]:
-    """Render a MuJoCo rollout offscreen and extract float32 RGBA frames (alpha from depth)."""
-    model = mujoco.MjModel.from_xml_string(mjcf_xml)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
-    data = mujoco.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
-    rgb_renderer = mujoco.Renderer(model, height=height, width=width)
-    depth_renderer = mujoco.Renderer(model, height=height, width=width)
-    depth_renderer.enable_depth_rendering()
-
-    frames: list[np.ndarray] = []
-    try:
-        for frame_idx in range(num_frames):
-            if frame_idx > 0:
-                for _ in range(steps_per_frame):
-                    mujoco.mj_step(model, data)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
-            else:
-                mujoco.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
-
-            rgb_renderer.update_scene(data, camera=camera)
-            rgb = rgb_renderer.render().astype(np.float32) / 255.0
-
-            depth_renderer.update_scene(data, camera=camera)
-            depth = depth_renderer.render()
-            # Background sky/far plane sits near infinity or > 50m in default MJCF scenes.
-            alpha = np.where(np.isfinite(depth) & (depth > 0.0) & (depth < 50.0), 1.0, 0.0).astype(
-                np.float32
-            )
-            rgba = np.concatenate([rgb, alpha[..., None]], axis=-1)
-            frames.append(rgba)
-    finally:
-        rgb_renderer.close()
-        depth_renderer.close()
-    return frames

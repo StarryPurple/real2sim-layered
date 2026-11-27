@@ -10,6 +10,12 @@ import mujoco
 import numpy as np
 
 from real2sim_layered.schemas import CameraSpec, CoarseSceneSpec, KeyframePose, SceneObjectSpec
+from real2sim_layered.sim._mujoco import (
+    joint_qpos_adr,
+    load_mjcf_model,
+    mj_forward,
+    new_mj_data,
+)
 
 
 def _camera_xyaxes(cam: CameraSpec) -> str:
@@ -46,11 +52,12 @@ def _euler_to_quat_wxyz(euler_xyz: tuple[float, float, float]) -> tuple[float, f
     cx, sx = math.cos(0.5 * rx), math.sin(0.5 * rx)
     cy, sy = math.cos(0.5 * ry), math.sin(0.5 * ry)
     cz, sz = math.cos(0.5 * rz), math.sin(0.5 * rz)
-    w = cx * cy * cz + sx * sy * sz
-    x = sx * cy * cz - cx * sy * sz
-    y = cx * sy * cz + sx * cy * sz
-    z = cx * cy * sz - sx * sy * cz
-    return (w, x, y, z)
+    return (
+        cx * cy * cz + sx * sy * sz,
+        sx * cy * cz - cx * sy * sz,
+        cx * sy * cz + sx * cy * sz,
+        cx * cy * sz - sx * sy * cz,
+    )
 
 
 def interpolate_object_pose(
@@ -130,9 +137,8 @@ def render_coarse_scene_mujoco(
 ) -> dict[str, list[np.ndarray]]:
     """Render kinematic keyframe-interpolated CoarseSceneSpec across views as float32 RGBA."""
     # Omit floor plane during foreground RGBA rendering so alpha matches segmented object masks.
-    xml = build_mjcf_xml(scene, include_floor=False)
-    model = mujoco.MjModel.from_xml_string(xml)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
-    data = mujoco.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
+    model = load_mjcf_model(build_mjcf_xml(scene, include_floor=False))
+    data = new_mj_data(model)
 
     rgb_renderer = mujoco.Renderer(model, height=height, width=width)
     seg_renderer = mujoco.Renderer(model, height=height, width=width)
@@ -141,9 +147,9 @@ def render_coarse_scene_mujoco(
     body_qpos_adr: dict[str, int] = {}
     for obj in scene.objects:
         if obj.is_dynamic:
-            jnt_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f"{obj.object_id}_jnt")  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
-            if jnt_id >= 0:
-                body_qpos_adr[obj.object_id] = int(model.jnt_qposadr[jnt_id])
+            adr = joint_qpos_adr(model, f"{obj.object_id}_jnt")
+            if adr is not None:
+                body_qpos_adr[obj.object_id] = adr
 
     available_cams = {cam.name for cam in scene.cameras}
     active_views = [v for v in views if v in available_cams]
@@ -156,10 +162,9 @@ def render_coarse_scene_mujoco(
                 if adr is None:
                     continue
                 pos, eul = interpolate_object_pose(obj.keyframes, frame_idx)
-                quat = _euler_to_quat_wxyz(eul)
                 data.qpos[adr : adr + 3] = pos
-                data.qpos[adr + 3 : adr + 7] = quat
-            mujoco.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]  # mujoco dynamic C-extension export
+                data.qpos[adr + 3 : adr + 7] = _euler_to_quat_wxyz(eul)
+            mj_forward(model, data)
 
             for view_name in active_views:
                 rgb_renderer.update_scene(data, camera=view_name)

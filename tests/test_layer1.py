@@ -20,9 +20,10 @@ from real2sim_layered.schemas import (
     PhysicalRegime,
 )
 from real2sim_layered.sim import (
+    BLENDER_WORKER_PATH,
+    build_blender_command,
     build_mjcf_xml,
     evaluate_mujoco_scene,
-    generate_blender_script,
     interpolate_object_pose,
 )
 
@@ -86,7 +87,8 @@ def test_layer1_sim_proxy_compiles_renders_and_verifies(tmp_path: Path) -> None:
     assert len(scene.objects[0].keyframes) == 4
     # Median foreground color should preserve the green channel dominance.
     r, g, b, _ = scene.objects[0].color_rgba
-    assert g > r and g > b
+    assert g > r
+    assert g > b
 
     pos_mid, _ = interpolate_object_pose(scene.objects[0].keyframes, 1)
     assert len(pos_mid) == 3
@@ -116,14 +118,16 @@ def test_layer1_procedural_blender_builds_blend_and_renders(tmp_path: Path) -> N
     scene = synthesize_coarse_scene(
         case, ikg, backend=AssetBackend.PROCEDURAL_BLENDER, max_frames=3
     )
-    script = generate_blender_script(
-        scene=scene,
+    assert BLENDER_WORKER_PATH.is_file()
+    cmd = build_blender_command(
+        spec_path=tmp_path / "scene_spec.json",
         frame_indices=[0],
         views=["eval_0"],
-        render_dir=tmp_path / "renders",
-        blend_out=tmp_path / "scene.blend",
+        out_dir=tmp_path / "out_blender",
+        blender_bin="/usr/bin/blender",
     )
-    assert "bpy.ops.wm.save_as_mainfile" in script
+    assert str(BLENDER_WORKER_PATH) in cmd
+    assert "--spec" in cmd
 
     blender = os.environ.get("BLENDER_BIN") or shutil.which("blender")
     if not blender:
@@ -137,8 +141,8 @@ def test_layer1_procedural_blender_builds_blend_and_renders(tmp_path: Path) -> N
         width=80,
         height=60,
     )
-    assert artifacts.blend_path is not None and artifacts.blend_path.is_file()
-    assert artifacts.blender_script_path is not None and artifacts.blender_script_path.is_file()
+    assert artifacts.blend_path is not None
+    assert artifacts.blend_path.is_file()
     assert "eval_0" in artifacts.rendered_by_view
     assert artifacts.rendered_by_view["eval_0"][0].shape == (60, 80, 4)
     assert float(artifacts.rendered_by_view["eval_0"][0][..., 3].mean()) > 0.0

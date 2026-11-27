@@ -1,0 +1,13 @@
+id: no-silent-except-pass
+language: python
+severity: error
+message: "Do not silently swallow exceptions with `except ...: pass`; handle or propagate explicitly."
+files:
+  - src/**/*.py
+  - scripts/**/*.py
+rule:
+  kind: except_clause
+  has:
+    kind: block
+    has:
+      kind: pass_statement

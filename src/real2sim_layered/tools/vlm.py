@@ -8,13 +8,19 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from openai import OpenAI
 from PIL import Image
 from pydantic import ValidationError
 
-from real2sim_layered.schemas import InteractionGraph, MvoikCase, VlmConfig
+from real2sim_layered.schemas import (
+    AssetBackend,
+    InteractionGraph,
+    MvoikCase,
+    PhysicalRegime,
+    VlmConfig,
+)
 from real2sim_layered.tools.mvoik4d import sample_frame_indices
 
 _SYSTEM_PROMPT = """\
@@ -39,6 +45,22 @@ Backend definitions:
 _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
 
+class _CompletionsEndpoint(Protocol):
+    def create(self, **_: Any) -> Any: ...
+
+
+class _ChatNamespace(Protocol):
+    @property
+    def completions(self) -> _CompletionsEndpoint: ...
+
+
+class ChatCompletionsClient(Protocol):
+    """Minimal structural interface satisfied by `openai.OpenAI` and unit-test doubles."""
+
+    @property
+    def chat(self) -> _ChatNamespace: ...
+
+
 def compute_union_alpha_bbox(
     paths: list[Path],
     alpha_threshold: int = 16,
@@ -57,9 +79,7 @@ def compute_union_alpha_bbox(
         with Image.open(path) as img:
             rgba = img.convert("RGBA")
             img_w, img_h = rgba.size
-            alpha = rgba.getchannel("A")
-            mask = alpha.point(lut)
-            bbox = mask.getbbox()
+            bbox = rgba.getchannel("A").point(lut).getbbox()
             if bbox is None:
                 continue
             bx0, by0, bx1, by1 = bbox
@@ -70,10 +90,8 @@ def compute_union_alpha_bbox(
 
     if x0 is None or y0 is None or img_w == 0 or img_h == 0:
         return None
-    bw = max(1, x1 - x0)
-    bh = max(1, y1 - y0)
-    pad_x = round(bw * pad_ratio)
-    pad_y = round(bh * pad_ratio)
+    pad_x = round(max(1, x1 - x0) * pad_ratio)
+    pad_y = round(max(1, y1 - y0) * pad_ratio)
     return (
         max(0, x0 - pad_x),
         max(0, y0 - pad_y),
@@ -111,7 +129,6 @@ def encode_frame_data_url(
 def extract_json_payload(raw_text: str) -> dict[str, Any]:
     """Extract the first JSON object from model output (handles optional markdown code fences)."""
     cleaned = raw_text.strip()
-    # Strip optional thinking blocks emitted by reasoning VLMs.
     if "</think>" in cleaned:
         cleaned = cleaned.split("</think>", 1)[1].strip()
     fence = _JSON_BLOCK_RE.search(cleaned)
@@ -135,11 +152,13 @@ def _anonymize_case_id(case_id: str) -> str:
 
 def _build_ikg_prompt(case: MvoikCase, sampled_indices: list[int]) -> str:
     blind_id = _anonymize_case_id(case.case_id)
+    regimes = " | ".join(PhysicalRegime)
+    backends = " | ".join(AssetBackend)
     schema_hint = {
         "case_id": blind_id,
         "summary": "One-sentence description of what physically happens.",
-        "dominant_regime": "rigid | occluded_kinematic | deformable | topological_split | multiphysics_ood",
-        "recommended_backend": "procedural_blender | sim_proxy | image_to_3d_sim",
+        "dominant_regime": regimes,
+        "recommended_backend": backends,
         "objects": [
             {
                 "object_id": "snake_case_id",
@@ -159,7 +178,7 @@ def _build_ikg_prompt(case: MvoikCase, sampled_indices: list[int]) -> str:
                 "contact_expected": True,
                 "occlusion_expected": False,
                 "requires_physics_escalation": True,
-                "regime": "rigid | occluded_kinematic | deformable | topological_split | multiphysics_ood",
+                "regime": regimes,
             }
         ],
         "confidence": 0.8,
@@ -188,9 +207,9 @@ class VlmExtractionResult:
 class OpenAICompatVlmClient:
     """Unified OpenAI-compatible VLM client targeting local Qwen3.5-4B or remote APIs."""
 
-    def __init__(self, config: VlmConfig, client: OpenAI | None = None) -> None:
+    def __init__(self, config: VlmConfig, client: ChatCompletionsClient | None = None) -> None:
         self.config = config
-        self._client = client or OpenAI(
+        self._client: Any = client or OpenAI(
             base_url=config.base_url,
             api_key=config.api_key,
             timeout=config.timeout_s,
@@ -227,7 +246,7 @@ class OpenAICompatVlmClient:
         for _ in range(max_attempts):
             response = self._client.chat.completions.create(
                 model=self.config.model,
-                messages=messages,  # pyright: ignore[reportArgumentType]  # OpenAI SDK TypedDict accepts multimodal list
+                messages=messages,
                 max_tokens=self.config.max_tokens,
                 temperature=self.config.temperature,
             )

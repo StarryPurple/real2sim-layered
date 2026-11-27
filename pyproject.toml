@@ -24,8 +24,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "ast-grep-cli>=0.51.3",
+    "deptry>=0.25.1",
     "pytest>=8.3.0",
     "ruff>=0.9.0",
+    "vulture>=2.16",
 ]
 vlm = [
     "transformers>=5.0.0",
@@ -68,15 +71,26 @@ select = [
     "RUF",
     "C90",
     "T20",
+    "ARG",
+    "ERA",
+    "PIE",
+    "PERF",
+    "PLR",
+    "PT",
 ]
 ignore = [
-    "E501",  # Line length is enforced by ruff format
+    "E501",     # Line length is enforced by ruff format
+    "PLR2004",  # Numeric physics/geometry constants in expressions are intentional
 ]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 12
 
+[tool.ruff.lint.pylint]
+max-args = 8
+
 [tool.ruff.lint.per-file-ignores]
+"src/real2sim_layered/cli.py" = ["T201"]  # CLI entrypoint prints user-facing tables/status
 "scripts/*.py" = ["T201"]  # CLI helper scripts print status output
 "tests/*.py" = ["T201"]
 
@@ -91,7 +105,36 @@ venvPath = "."
 venv = ".venv"
 typeCheckingMode = "standard"
 include = ["src", "scripts", "tests"]
-exclude = ["cache", "data", "outputs", "tmp", "tools", ".venv"]
+exclude = [
+    "cache",
+    "data",
+    "outputs",
+    "tmp",
+    "tools",
+    ".venv",
+    "src/real2sim_layered/sim/blender_worker.py",  # Runs inside Blender 4.2 embedded Python (bpy)
+]
+
+[tool.vulture]
+paths = ["src", "scripts"]
+min_confidence = 80
+exclude = ["src/real2sim_layered/sim/blender_worker.py"]
+
+[tool.deptry]
+known_first_party = ["real2sim_layered"]
+optional_dependencies_dev_groups = ["dev"]
+extend_exclude = [
+    "cache",
+    "data",
+    "outputs",
+    "tmp",
+    "tools",
+    "src/real2sim_layered/sim/blender_worker.py",
+]
+
+[tool.deptry.per_rule_ignores]
+# transformers runtime plugins (accelerate, qwen-vl-utils) and reserved Layer 2-3 media/vision deps
+DEP002 = ["accelerate", "qwen-vl-utils", "torchvision", "imageio", "pyyaml", "matplotlib"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

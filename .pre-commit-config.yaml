@@ -39,6 +39,27 @@ repos:
         types: [python]
         pass_filenames: false
 
+      - id: ast-grep
+        name: ast-grep scan
+        entry: .venv/bin/ast-grep scan --error
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: vulture
+        name: vulture
+        entry: .venv/bin/vulture
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: deptry
+        name: deptry
+        entry: .venv/bin/deptry src scripts
+        language: system
+        files: (^pyproject\.toml$|\.py$)
+        pass_filenames: false
+
       - id: shellcheck
         name: shellcheck
         entry: shellcheck

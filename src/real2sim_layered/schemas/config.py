@@ -1,14 +1,24 @@
-"""Single-source runtime and VLM configuration loader."""
+"""Single-source runtime, VLM, proxy, and external-binary configuration loader."""
 
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+_PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
 
-def _parse_dotenv(env_file: Path) -> dict[str, str]:
+
+def parse_dotenv(env_file: Path) -> dict[str, str]:
     """Parse KEY=VALUE pairs from a local .env file without mutating os.environ."""
     values: dict[str, str] = {}
     if not env_file.is_file():
@@ -32,6 +42,29 @@ def _resolve_setting(key: str, dotenv: dict[str, str], default: str) -> str:
     return dotenv.get(key, default)
 
 
+def load_hf_token(env_file: Path | None = None) -> str | None:
+    """Load HF_TOKEN from environment or a local .env file without echoing it."""
+    dotenv = parse_dotenv(env_file) if env_file is not None else {}
+    token = _resolve_setting("HF_TOKEN", dotenv, "")
+    return token or None
+
+
+def clear_proxy_env() -> None:
+    """Remove proxy environment variables so HuggingFace/local requests connect directly."""
+    for key in _PROXY_ENV_KEYS:
+        os.environ.pop(key, None)
+
+
+def resolve_blender_bin(configured: str | None = None) -> str:
+    """Resolve the Blender 4.2 executable path from config, BLENDER_BIN, or PATH."""
+    blender_bin = configured or os.environ.get("BLENDER_BIN") or shutil.which("blender")
+    if not blender_bin:
+        raise RuntimeError(
+            "BLENDER_BIN is not set and 'blender' is not on PATH; run 'source scripts/env.sh'."
+        )
+    return blender_bin
+
+
 class VlmConfig(BaseModel):
     """Configuration for an OpenAI-compatible Vision-Language Model endpoint."""
 
@@ -44,7 +77,7 @@ class VlmConfig(BaseModel):
 
     @classmethod
     def from_env(cls, env_file: Path | None = None) -> VlmConfig:
-        dotenv = _parse_dotenv(env_file) if env_file is not None else {}
+        dotenv = parse_dotenv(env_file) if env_file is not None else {}
         return cls(
             base_url=_resolve_setting("VLM_BASE_URL", dotenv, "http://127.0.0.1:8000/v1"),
             api_key=_resolve_setting(
@@ -71,7 +104,7 @@ class RuntimeConfig(BaseModel):
     def from_env(cls, project_root: Path | None = None) -> RuntimeConfig:
         root = (project_root or Path(os.environ.get("REAL2SIM_ROOT", "."))).resolve()
         env_file = root / ".env"
-        dotenv = _parse_dotenv(env_file)
+        dotenv = parse_dotenv(env_file)
         dataset_root = Path(
             _resolve_setting("MVOIK4D_ROOT", dotenv, str(root / "data" / "MVOIK-4D"))
         )
