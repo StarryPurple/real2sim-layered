@@ -10,8 +10,8 @@ This document defines the repository ownership boundaries, declarative module la
 | `src/real2sim_layered/tools/` | MVOIK-4D RGBA loader, 5-case probe manifest, OpenAI-compatible VLM client (`mvoik4d`, `vlm`) | Operational (`tach`-checked) |
 | `src/real2sim_layered/sim/` | MuJoCo MJCF compiler & diagnostics (`_mujoco`, `diagnostics`, `mujoco_builder`) and headless Blender 4.2 worker (`blender_builder`, `blender_worker`) | Operational (`tach`-checked) |
 | `src/real2sim_layered/eval/` | Dual-axis visual + physical evaluation and Markdown/JSON reporting (`metrics`) | Operational (`tach`-checked) |
-| `src/real2sim_layered/agent/` | Layer-1 coarse Real2Sim synthesis (`layer1`); planned Layers 2–3 escalation & fallback | Operational (`tach`-checked) |
-| `src/real2sim_layered/cli.py` | CLI entrypoints (`probe-inspect`, `eval-smoke`, `extract-ikg`, `run-layer1`) | Operational (`tach`-checked) |
+| `src/real2sim_layered/agent/` | Layer-1 synthesis (`layer1`), Layer-2 local physics escalation (`layer2`), Layer-3 anomaly fallback (`layer3`) | Operational (`tach`-checked) |
+| `src/real2sim_layered/cli.py` | CLI entrypoints (`probe-inspect`, `eval-smoke`, `extract-ikg`, `run-layer1`, `run-ablation`) | Operational (`tach`-checked) |
 | `scripts/` | Environment setup (`env.sh`), checks (`check_env.py`, `check-docs.sh`), dataset download (`download_mvoik4d.py`), local VLM server (`serve_vlm.py`) | Operational |
 | `rules/ast-grep/` & `sgconfig.yml` | Mechanical AST invariant rules (`no-scattered-environ`, `no-silent-except-pass`) | Operational |
 | `tests/` | Automated `pytest` verification suite | Operational |
@@ -24,8 +24,8 @@ This document defines the repository ownership boundaries, declarative module la
 
 | Layer | Responsibility | Allowed dependencies |
 | :--- | :--- | :--- |
-| `cli` | CLI entrypoints and evaluation/extraction/Layer-1 orchestration | `schemas`, `tools`, `eval`, `agent` |
-| `agent` | Layer-1 synthesis (`layer1`) and planned Layers 2–3 escalation & fallback | `sim`, `tools`, `schemas` |
+| `cli` | CLI entrypoints and evaluation/extraction/layered ablation orchestration | `schemas`, `tools`, `eval`, `agent` |
+| `agent` | Layer-1 synthesis (`layer1`), Layer-2 physics escalation (`layer2`), Layer-3 anomaly fallback (`layer3`) | `sim`, `tools`, `schemas` |
 | `eval` | Multi-view RGBA metrics and dual-axis physical+visual report synthesis | `schemas`, `sim` |
 | `sim` & `tools` | MuJoCo/Blender builders & diagnostics and MVOIK-4D / VLM adapters | `schemas` |
 | `schemas` | Pure Pydantic data models (`models`) and single-source configuration (`config`) | Standard library and `pydantic` only |

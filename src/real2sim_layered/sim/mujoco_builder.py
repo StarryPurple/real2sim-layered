@@ -14,6 +14,7 @@ from real2sim_layered.sim._mujoco import (
     joint_qpos_adr,
     load_mjcf_model,
     mj_forward,
+    mj_step,
     new_mj_data,
 )
 
@@ -126,6 +127,68 @@ def build_mjcf_xml(scene: CoarseSceneSpec, include_floor: bool = True) -> str:
 
     lines.extend(["  </worldbody>", "</mujoco>"])
     return "\n".join(lines) + "\n"
+
+
+def _quat_wxyz_to_euler_xyz(
+    quat: tuple[float, float, float, float],
+) -> tuple[float, float, float]:
+    w, x, y, z = quat
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+
+    sinp = max(-1.0, min(1.0, 2.0 * (w * y - z * x)))
+    pitch = math.asin(sinp)
+
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    return (roll, pitch, yaw)
+
+
+def simulate_mujoco_keyframes(
+    scene: CoarseSceneSpec,
+    frame_indices: list[int],
+) -> CoarseSceneSpec:
+    """Roll out MuJoCo dynamics from frame 0 and record simulated poses at `frame_indices`."""
+    model = load_mjcf_model(build_mjcf_xml(scene, include_floor=True))
+    data = new_mj_data(model)
+    dt = float(model.opt.timestep)
+
+    body_qpos_adr: dict[str, int] = {}
+    for obj in scene.objects:
+        if obj.is_dynamic:
+            adr = joint_qpos_adr(model, f"{obj.object_id}_jnt")
+            if adr is not None:
+                body_qpos_adr[obj.object_id] = adr
+
+    ordered_frames = sorted(set(frame_indices))
+    recorded: dict[str, list[KeyframePose]] = {obj.object_id: [] for obj in scene.objects}
+    mj_forward(model, data)
+
+    cur_step = 0
+    for frame_idx in ordered_frames:
+        target_step = max(0, round((frame_idx / scene.fps) / dt))
+        while cur_step < target_step:
+            mj_step(model, data)
+            cur_step += 1
+
+        for obj in scene.objects:
+            adr = body_qpos_adr.get(obj.object_id)
+            if adr is None or not np.all(np.isfinite(data.qpos[adr : adr + 7])):
+                pos, eul = interpolate_object_pose(obj.keyframes, frame_idx)
+            else:
+                q = data.qpos[adr : adr + 7]
+                pos = (float(q[0]), float(q[1]), float(q[2]))
+                eul = _quat_wxyz_to_euler_xyz((float(q[3]), float(q[4]), float(q[5]), float(q[6])))
+            recorded[obj.object_id].append(
+                KeyframePose(frame_idx=frame_idx, position=pos, euler_xyz=eul)
+            )
+
+    new_objs = [
+        obj.model_copy(update={"keyframes": recorded[obj.object_id]}) for obj in scene.objects
+    ]
+    return scene.model_copy(update={"objects": new_objs})
 
 
 def render_coarse_scene_mujoco(

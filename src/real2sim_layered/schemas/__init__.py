@@ -1,4 +1,4 @@
-"""Pydantic data contracts and single-source configuration schemas."""
+"""Pydantic data contracts and single-source runtime configuration."""
 
 from __future__ import annotations
 
@@ -7,14 +7,16 @@ from real2sim_layered.schemas.config import (
     VlmConfig,
     clear_proxy_env,
     load_hf_token,
-    parse_dotenv,
     resolve_blender_bin,
 )
 from real2sim_layered.schemas.models import (
+    AnomalyReport,
     AssetBackend,
     CameraSpec,
     CoarseSceneSpec,
     DualAxisReport,
+    EscalationWindow,
+    ExecutionMode,
     InteractionGraph,
     InteractionInterval,
     KeyframePose,
@@ -30,13 +32,17 @@ from real2sim_layered.schemas.models import (
     Vec3,
     ViewVisualMetrics,
     VisualMetrics,
+    WindowSource,
 )
 
 __all__ = [
+    "AnomalyReport",
     "AssetBackend",
     "CameraSpec",
     "CoarseSceneSpec",
     "DualAxisReport",
+    "EscalationWindow",
+    "ExecutionMode",
     "InteractionGraph",
     "InteractionInterval",
     "KeyframePose",
@@ -54,8 +60,8 @@ __all__ = [
     "ViewVisualMetrics",
     "VisualMetrics",
     "VlmConfig",
+    "WindowSource",
     "clear_proxy_env",
     "load_hf_token",
-    "parse_dotenv",
     "resolve_blender_bin",
 ]

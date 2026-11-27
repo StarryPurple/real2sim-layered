@@ -1,8 +1,9 @@
-"""Unit tests for MuJoCo physical diagnostics and dual-axis evaluation metrics."""
+"""Unit tests for MuJoCo physical diagnostics (incl. counter-examples) and dual-axis metrics."""
 
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from real2sim_layered.eval import (
     compute_frame_visual_metrics,
@@ -39,6 +40,23 @@ _FLOATING_ZERO_G_XML = """
 </mujoco>
 """
 
+_ONE_GROUNDED_ONE_FLOATING_XML = """
+<mujoco>
+  <option gravity="0 0 0" timestep="0.005"/>
+  <worldbody>
+    <geom name="floor" type="plane" size="2 2 0.1"/>
+    <body name="grounded" pos="-0.3 0 0.049">
+      <freejoint/>
+      <geom type="box" size="0.05 0.05 0.05" mass="0.2"/>
+    </body>
+    <body name="floater" pos="0.3 0 0.6">
+      <freejoint/>
+      <geom type="sphere" size="0.05" mass="0.2"/>
+    </body>
+  </worldbody>
+</mujoco>
+"""
+
 
 def test_visual_metrics_identical_and_disjoint() -> None:
     gt = np.zeros((64, 64, 4), dtype=np.float32)
@@ -62,8 +80,11 @@ def test_visual_metrics_identical_and_disjoint() -> None:
     assert mv.mean_silhouette_iou == 1.0
     assert len(mv.per_view) == 2
 
+    with pytest.raises(ValueError, match="frame count mismatch"):
+        evaluate_multiview_rgba({"eval_0": [gt]}, {"eval_0": [gt, gt]})
 
-def test_mujoco_diagnostics_distinguish_stable_vs_floating() -> None:
+
+def test_mujoco_diagnostics_per_body_floating_not_masked() -> None:
     stable = evaluate_mujoco_scene(_STABLE_BLOCK_XML, num_steps=120)
     assert stable.stable is True
     assert stable.object_permanence_ok is True
@@ -75,6 +96,10 @@ def test_mujoco_diagnostics_distinguish_stable_vs_floating() -> None:
     assert floating.floating_frame_ratio > 0.9
     assert any("floating" in note.lower() for note in floating.notes)
 
+    # Counter-example: one grounded body MUST NOT mask a second floating body.
+    mixed = evaluate_mujoco_scene(_ONE_GROUNDED_ONE_FLOATING_XML, num_steps=80)
+    assert mixed.floating_frame_ratio >= 0.45
+
 
 def test_format_reports_markdown() -> None:
     phys = evaluate_mujoco_scene(_STABLE_BLOCK_XML, num_steps=40)
@@ -82,10 +107,11 @@ def test_format_reports_markdown() -> None:
         case_id="0004_brick_fall_1",
         regime=PhysicalRegime.RIGID,
         method_tag="unit_test",
+        execution_mode="physics_sim",
         physics=phys,
         vlm_tokens_used=420,
     )
     table = format_reports_markdown([rep])
     assert "0004_brick_fall_1" in table
     assert "unit_test" in table
-    assert "420" in table
+    assert "physics_sim" in table

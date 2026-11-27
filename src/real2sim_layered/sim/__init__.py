@@ -12,6 +12,7 @@ from real2sim_layered.sim.mujoco_builder import (
     build_mjcf_xml,
     interpolate_object_pose,
     render_coarse_scene_mujoco,
+    simulate_mujoco_keyframes,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "interpolate_object_pose",
     "render_coarse_scene_mujoco",
     "run_blender_scene",
+    "simulate_mujoco_keyframes",
 ]

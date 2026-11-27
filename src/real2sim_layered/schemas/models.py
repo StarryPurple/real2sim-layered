@@ -1,4 +1,4 @@
-"""Pure Pydantic domain contracts: dataset, IKG (G_int), coarse scene (S_0), and eval."""
+"""Pure Pydantic domain contracts: dataset, IKG (G_int), scene (S_0), layered trace, and eval."""
 
 from __future__ import annotations
 
@@ -6,11 +6,19 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 Vec3 = tuple[float, float, float]
 RgbaColor = tuple[float, float, float, float]
 PrimitiveKind = Literal["box", "sphere", "cylinder", "capsule"]
+WindowSource = Literal["vlm_ikg", "visual_motion", "both"]
+ExecutionMode = Literal[
+    "kinematic",
+    "physics_sim",
+    "fallback_deformable",
+    "fallback_topological",
+    "fallback_kinematic",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +117,12 @@ class InteractionInterval(BaseModel):
     )
     regime: PhysicalRegime = Field(default=PhysicalRegime.RIGID)
 
+    @model_validator(mode="after")
+    def _ensure_ordered_interval(self) -> InteractionInterval:
+        if self.end_frame < self.start_frame:
+            self.start_frame, self.end_frame = self.end_frame, self.start_frame
+        return self
+
 
 class InteractionGraph(BaseModel):
     """Layer-1 structured Interaction Knowledge Graph (G_int) extracted by VLM."""
@@ -123,7 +137,7 @@ class InteractionGraph(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Coarse 4D scene specification (S_0)
+# Coarse 4D scene specification (S_0) and Layered Execution Trace
 # ---------------------------------------------------------------------------
 
 
@@ -160,11 +174,11 @@ class CameraSpec(BaseModel):
     name: str
     position: Vec3
     target: Vec3 = (0.0, 0.0, 0.12)
-    fov_y_deg: float = Field(default=42.0, gt=5.0, lt=140.0)
+    fov_y_deg: float = Field(default=49.1, gt=5.0, lt=140.0)
 
 
 class CoarseSceneSpec(BaseModel):
-    """Layer-1 editable 4D scene hypothesis (S_0) compiled to MJCF or Blender."""
+    """Layer-1/2/3 editable 4D scene hypothesis compiled to MJCF or Blender."""
 
     case_id: str
     backend: AssetBackend
@@ -175,6 +189,26 @@ class CoarseSceneSpec(BaseModel):
     cameras: list[CameraSpec] = Field(min_length=1)
     objects: list[SceneObjectSpec] = Field(min_length=1)
     notes: list[str] = Field(default_factory=list)
+
+
+class EscalationWindow(BaseModel):
+    """Temporal window selected for Layer-2 local physics escalation."""
+
+    start_frame: int = Field(ge=0)
+    end_frame: int = Field(ge=0)
+    source: WindowSource
+    reason: str
+
+
+class AnomalyReport(BaseModel):
+    """Layer-3 failure-aware anomaly detection and fallback routing decision."""
+
+    triggered: bool
+    non_rigid_shape_cv: float = Field(default=0.0, ge=0.0)
+    physics_tracking_err_m: float = Field(default=0.0, ge=0.0)
+    silhouette_drop: float = Field(default=0.0)
+    fallback_mode: ExecutionMode = "physics_sim"
+    reason: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +238,7 @@ class VisualMetrics(BaseModel):
 
 
 class PhysicsMetrics(BaseModel):
-    """Deterministic physical verification diagnostics from MuJoCo/Blender."""
+    """Deterministic physical verification diagnostics from MuJoCo."""
 
     simulator: str = "mujoco"
     num_steps: int = Field(ge=1)
@@ -213,6 +247,7 @@ class PhysicsMetrics(BaseModel):
     max_penetration_m: float = Field(ge=0.0)
     floating_frame_ratio: float = Field(ge=0.0, le=1.0)
     support_stability_score: float = Field(ge=0.0, le=1.0)
+    trajectory_tracking_err_m: float = Field(default=0.0, ge=0.0)
     counterfactual_survival: bool
     notes: list[str] = Field(default_factory=list)
 
@@ -223,6 +258,8 @@ class DualAxisReport(BaseModel):
     case_id: str
     regime: PhysicalRegime
     method_tag: str
+    execution_mode: ExecutionMode = "kinematic"
+    anomaly_triggered: bool = False
     visual: VisualMetrics | None = None
     physics: PhysicsMetrics | None = None
     wall_time_s: float = Field(default=0.0, ge=0.0)

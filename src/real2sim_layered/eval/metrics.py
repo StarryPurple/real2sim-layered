@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 
 from real2sim_layered.schemas import (
+    CoarseSceneSpec,
     DualAxisReport,
+    ExecutionMode,
     MvoikCase,
     PhysicsMetrics,
     ViewVisualMetrics,
@@ -85,9 +88,11 @@ def evaluate_multiview_rgba(
     for view_name in shared_views:
         preds = pred_by_view[view_name]
         gts = gt_by_view[view_name]
-        n = min(len(preds), len(gts))
-        if n == 0:
-            raise ValueError(f"Empty frame list for view '{view_name}'")
+        if not preds or len(preds) != len(gts):
+            raise ValueError(
+                f"View '{view_name}' frame count mismatch: pred={len(preds)} vs gt={len(gts)}"
+            )
+        n = len(preds)
         ious: list[float] = []
         psnrs: list[float] = []
         maes: list[float] = []
@@ -118,53 +123,66 @@ def evaluate_multiview_rgba(
     )
 
 
+@dataclass(frozen=True)
+class EvalRunMeta:
+    """Execution metadata attached to a dual-axis evaluation run."""
+
+    physics_steps: int = 200
+    wall_time_s: float = 0.0
+    vlm_tokens_used: int = 0
+    execution_mode: ExecutionMode = "kinematic"
+    anomaly_triggered: bool = False
+
+
 def evaluate_case_dual_axis(
     case: MvoikCase,
     method_tag: str,
     pred_by_view: dict[str, list[np.ndarray]] | None = None,
     gt_by_view: dict[str, list[np.ndarray]] | None = None,
     mjcf_xml: str | None = None,
-    physics_steps: int = 200,
-    wall_time_s: float = 0.0,
-    vlm_tokens_used: int = 0,
+    scene: CoarseSceneSpec | None = None,
+    meta: EvalRunMeta | None = None,
 ) -> DualAxisReport:
     """Compute a DualAxisReport combining visual metrics and MuJoCo physics diagnostics."""
+    run_meta = meta or EvalRunMeta()
     visual: VisualMetrics | None = None
     if pred_by_view is not None and gt_by_view is not None:
         visual = evaluate_multiview_rgba(pred_by_view, gt_by_view)
 
     physics: PhysicsMetrics | None = None
     if mjcf_xml is not None:
-        physics = evaluate_mujoco_scene(mjcf_xml, num_steps=physics_steps)
+        physics = evaluate_mujoco_scene(mjcf_xml, num_steps=run_meta.physics_steps, scene=scene)
 
     return DualAxisReport(
         case_id=case.case_id,
         regime=case.regime,
         method_tag=method_tag,
+        execution_mode=run_meta.execution_mode,
+        anomaly_triggered=run_meta.anomaly_triggered,
         visual=visual,
         physics=physics,
-        wall_time_s=wall_time_s,
-        vlm_tokens_used=vlm_tokens_used,
+        wall_time_s=run_meta.wall_time_s,
+        vlm_tokens_used=run_meta.vlm_tokens_used,
     )
 
 
 def format_reports_markdown(reports: list[DualAxisReport]) -> str:
     """Render a compact Markdown summary table suitable for .agents/records/."""
     header = (
-        "| Case | Regime | Method | IoU | PSNR (dB) | CosSim | Stable | MaxPen (m) | Float% | CF-OK | Tokens |\n"
-        "| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |"
+        "| Case | Regime | Method | Mode | IoU | PSNR | CosSim | MaxPen | Float% | TrackErr | CF-OK | Time(s) |\n"
+        "| :--- | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |"
     )
     rows = [header]
     for rep in reports:
         iou = f"{rep.visual.mean_silhouette_iou:.3f}" if rep.visual else "—"
         psnr = f"{rep.visual.mean_masked_psnr_db:.1f}" if rep.visual else "—"
         cos = f"{rep.visual.mean_patch_cosine_sim:.3f}" if rep.visual else "—"
-        stable = ("yes" if rep.physics.stable else "no") if rep.physics else "—"
         pen = f"{rep.physics.max_penetration_m:.4f}" if rep.physics else "—"
         flt = f"{rep.physics.floating_frame_ratio * 100:.1f}%" if rep.physics else "—"
+        trk = f"{rep.physics.trajectory_tracking_err_m:.3f}" if rep.physics else "—"
         cf = ("yes" if rep.physics.counterfactual_survival else "no") if rep.physics else "—"
         rows.append(
-            f"| `{rep.case_id}` | `{rep.regime}` | `{rep.method_tag}` | "
-            f"{iou} | {psnr} | {cos} | {stable} | {pen} | {flt} | {cf} | {rep.vlm_tokens_used} |"
+            f"| `{rep.case_id}` | `{rep.regime}` | `{rep.method_tag}` | `{rep.execution_mode}` | "
+            f"{iou} | {psnr} | {cos} | {pen} | {flt} | {trk} | {cf} | {rep.wall_time_s:.2f} |"
         )
     return "\n".join(rows)

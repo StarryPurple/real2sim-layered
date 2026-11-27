@@ -87,10 +87,9 @@ def run_blender_scene(
         for frame_idx in frame_indices:
             img_path = render_dir / view_name / f"{frame_idx:06d}.png"
             if not img_path.is_file():
-                continue
+                raise RuntimeError(f"Blender failed to render expected frame: {img_path}")
             with Image.open(img_path) as img:
                 frames.append(np.asarray(img.convert("RGBA"), dtype=np.float32) / 255.0)
-        if frames:
-            rendered[view_name] = frames
+        rendered[view_name] = frames
 
     return blend_out, rendered
