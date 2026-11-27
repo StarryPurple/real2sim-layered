@@ -2,7 +2,7 @@
 
 Layered common-sense Real2Sim agent with local physics escalation and anomaly fallback for reconstructing dynamic 4D multi-object interactions from monocular video on **MVOIK-4D**.
 
-> **Project status**: Environment verification, MVOIK-4D `with_gt` loader and 5-case cross-regime probe manifest, MuJoCo physical diagnostics + dual-axis evaluator, local OpenAI-compatible `Qwen/Qwen3.5-4B` VLM server/client, and full code/doc gates are operational. Layer 1–3 scene synthesis and physics-escalation modules are in active development.
+> **Project status**: MVOIK-4D `with_gt` loader, 5-case cross-regime probe set, dual-axis MuJoCo+RGBA evaluator, local `Qwen/Qwen3.5-4B` OpenAI-compatible VLM pipeline, and Layer-1 coarse Real2Sim synthesis (`sim_proxy` MJCF & `procedural_blender` `.blend`) are operational. Layer-2 local physics escalation and Layer-3 anomaly fallback are in development.
 
 ## Quick start
 
@@ -31,11 +31,12 @@ python -m real2sim_layered.cli probe-inspect
 python -m real2sim_layered.cli eval-smoke --out outputs/eval_smoke_probe.json
 ```
 
-5. Serve local `Qwen/Qwen3.5-4B` (OpenAI-compatible) and extract structured Interaction Knowledge Graphs (`G_int`):
+5. Serve local `Qwen/Qwen3.5-4B` (OpenAI-compatible), extract `G_int`, and run the Layer-1 dual-backend baseline:
 
 ```sh
 python scripts/serve_vlm.py --model Qwen/Qwen3.5-4B --device cuda:2 --port 8000 --no-proxy
-python -m real2sim_layered.cli extract-ikg --max-frames 6
+python -m real2sim_layered.cli extract-ikg --max-frames 6 --out-dir outputs/ikg_probe_qwen35_4b_roi
+python -m real2sim_layered.cli run-layer1 --backend both --ikg-dir outputs/ikg_probe_qwen35_4b_roi --max-frames 6
 ```
 
 6. Run code quality, documentation, and test checks:

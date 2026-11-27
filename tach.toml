@@ -30,9 +30,18 @@ path = "real2sim_layered.eval"
 depends_on = ["real2sim_layered.schemas", "real2sim_layered.sim"]
 
 [[modules]]
+path = "real2sim_layered.agent"
+depends_on = [
+  "real2sim_layered.schemas",
+  "real2sim_layered.sim",
+  "real2sim_layered.tools",
+]
+
+[[modules]]
 path = "real2sim_layered.cli"
 depends_on = [
   "real2sim_layered.schemas",
   "real2sim_layered.tools",
   "real2sim_layered.eval",
+  "real2sim_layered.agent",
 ]

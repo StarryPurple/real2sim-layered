@@ -6,27 +6,28 @@ This document defines the repository ownership boundaries, declarative module la
 
 | Path | Owner / Responsibility | Current state |
 | :--- | :--- | :--- |
-| `src/real2sim_layered/schemas/` | Pure Pydantic contracts (`config`, `dataset`, `eval`, `ikg`) | Operational (`tach`-checked) |
+| `src/real2sim_layered/schemas/` | Pure Pydantic contracts (`config`, `dataset`, `eval`, `ikg`, `scene`) | Operational (`tach`-checked) |
 | `src/real2sim_layered/tools/` | MVOIK-4D RGBA loader, 5-case probe manifest, OpenAI-compatible VLM client (`mvoik4d`, `vlm`) | Operational (`tach`-checked) |
-| `src/real2sim_layered/sim/` | Deterministic MuJoCo physical diagnostics and offscreen EGL RGBA rendering (`diagnostics`) | Operational (`tach`-checked) |
+| `src/real2sim_layered/sim/` | MuJoCo MJCF compiler/diagnostics, Blender 4.2 `.blend` builder/renderer (`diagnostics`, `mujoco_builder`, `blender_builder`) | Operational (`tach`-checked) |
+| `src/real2sim_layered/agent/` | Layer-1 coarse scene synthesizer (`G_int -> S_0`) across pluggable backends (`layer1`) | Operational (`tach`-checked) |
 | `src/real2sim_layered/eval/` | Dual-axis visual + physical evaluation and Markdown/JSON reporting (`metrics`) | Operational (`tach`-checked) |
-| `src/real2sim_layered/cli.py` | CLI entrypoints (`probe-inspect`, `eval-smoke`, `extract-ikg`) | Operational (`tach`-checked) |
+| `src/real2sim_layered/cli.py` | CLI entrypoints (`probe-inspect`, `eval-smoke`, `extract-ikg`, `run-layer1`) | Operational (`tach`-checked) |
 | `scripts/` | Environment setup (`env.sh`), checks (`check_env.py`, `check-docs.sh`), dataset download (`download_mvoik4d.py`), local VLM server (`serve_vlm.py`) | Operational |
-| `tests/` | Automated `pytest` verification suite | 13 unit & data tests |
+| `tests/` | Automated `pytest` verification suite | 17 unit & integration tests |
 | `docs/` | Shipped contracts (`AGENTS.md`, `architecture.md`) and working formulation (`theory.md`) | Active |
 | `.agents/notes/` & `.agents/records/` | Durable decisions and bounded empirical study records | Active |
 
 ## Enforced module layering
 
-[tach.toml](../tach.toml) enforces downward-only dependencies across shipped modules (and will register `agent` once Layer 1–3 orchestration lands):
+[tach.toml](../tach.toml) enforces downward-only dependencies across all shipped modules:
 
 | Layer | Responsibility | Allowed dependencies |
 | :--- | :--- | :--- |
-| `cli` | CLI entrypoints and evaluation/extraction orchestration | `schemas`, `tools`, `eval` |
-| `agent` *(planned)* | Layered common-sense planner, local physics escalation, anomaly fallback | `sim`, `tools`, `schemas` |
+| `cli` | CLI entrypoints and evaluation/extraction orchestration | `schemas`, `tools`, `eval`, `agent` |
+| `agent` | Layer-1 coarse synthesis (and planned Layer 2–3 escalation/fallback) | `schemas`, `sim`, `tools` |
 | `eval` | Multi-view RGBA metrics and dual-axis physical+visual report synthesis | `schemas`, `sim` |
-| `sim` & `tools` | MuJoCo/Blender diagnostics and MVOIK-4D / VLM adapters | `schemas` |
-| `schemas` | Pure Pydantic data models, interaction graph types, and configuration contracts | Standard library and `pydantic` only |
+| `sim` & `tools` | MuJoCo/Blender builders & diagnostics and MVOIK-4D / VLM adapters | `schemas` |
+| `schemas` | Pure Pydantic data models, scene/IKG types, and configuration contracts | Standard library and `pydantic` only |
 
 Do not create empty placeholder subpackages ahead of real implementation. Add each module to [tach.toml](../tach.toml) in the same change that introduces it.
 
