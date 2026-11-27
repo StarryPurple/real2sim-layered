@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import math
+from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
@@ -99,16 +100,98 @@ def interpolate_object_pose(
     return ordered[-1].position, ordered[-1].euler_xyz, ordered[-1].scale
 
 
+def _collect_mesh_assets(
+    scene: CoarseSceneSpec,
+    include_floor: bool,
+) -> tuple[list[str], dict[str, list[str]], dict[str, str]]:
+    """Build `<asset>` XML lines for mesh-backed objects, returning collision names & material map."""
+    asset_lines: list[str] = []
+    col_names: dict[str, list[str]] = {}
+    mat_names: dict[str, str] = {}
+
+    for obj in scene.objects:
+        if not obj.visual_mesh_path or not Path(obj.visual_mesh_path).is_file():
+            continue
+        safe_id = escape(obj.object_id)
+        vis_file = escape(str(Path(obj.visual_mesh_path).resolve()))
+        asset_lines.append(f'    <mesh name="{safe_id}_vis_mesh" file="{vis_file}"/>')
+        if obj.texture_path and Path(obj.texture_path).is_file():
+            tex_file = escape(str(Path(obj.texture_path).resolve()))
+            asset_lines.append(f'    <texture name="{safe_id}_tex" type="2d" file="{tex_file}"/>')
+            asset_lines.append(
+                f'    <material name="{safe_id}_mat" texture="{safe_id}_tex" '
+                'specular="0.15" shininess="0.2"/>'
+            )
+            mat_names[obj.object_id] = f"{safe_id}_mat"
+        if include_floor:
+            names: list[str] = []
+            for idx, col_path in enumerate(obj.collision_mesh_paths):
+                if Path(col_path).is_file():
+                    cname = f"{safe_id}_col_{idx}"
+                    cfile = escape(str(Path(col_path).resolve()))
+                    asset_lines.append(f'    <mesh name="{cname}" file="{cfile}"/>')
+                    names.append(cname)
+            if names:
+                col_names[obj.object_id] = names
+    return asset_lines, col_names, mat_names
+
+
+def _append_object_geoms(
+    lines: list[str],
+    obj: SceneObjectSpec,
+    safe_id: str,
+    rgba_s: str,
+    include_floor: bool,
+    col_names: dict[str, list[str]],
+    mat_names: dict[str, str],
+) -> None:
+    has_vis_mesh = bool(obj.visual_mesh_path and Path(obj.visual_mesh_path).is_file())
+    if has_vis_mesh and include_floor and obj.object_id in col_names:
+        hulls = col_names[obj.object_id]
+        part_mass = max(0.01, obj.mass_kg / float(len(hulls)))
+        for idx, cname in enumerate(hulls):
+            lines.append(
+                f'      <geom name="{safe_id}_col_{idx}_geom" type="mesh" mesh="{cname}" '
+                f'mass="{part_mass:.4f}" friction="{obj.friction:.3f} 0.01 0.001" rgba="{rgba_s}"/>'
+            )
+        return
+    if has_vis_mesh:
+        mat_attr = (
+            f'material="{mat_names[obj.object_id]}"'
+            if obj.object_id in mat_names
+            else f'rgba="{rgba_s}"'
+        )
+        lines.append(
+            f'      <geom name="{safe_id}_geom" type="mesh" mesh="{safe_id}_vis_mesh" '
+            f'mass="{obj.mass_kg:.4f}" friction="{obj.friction:.3f} 0.01 0.001" {mat_attr}/>'
+        )
+        return
+    geom_type, size_s = _geom_type_and_size_str(obj)
+    lines.append(
+        f'      <geom name="{safe_id}_geom" type="{geom_type}" size="{size_s}" '
+        f'mass="{obj.mass_kg:.4f}" friction="{obj.friction:.3f} 0.01 0.001" rgba="{rgba_s}"/>'
+    )
+
+
 def build_mjcf_xml(scene: CoarseSceneSpec, include_floor: bool = True) -> str:
     """Compile a CoarseSceneSpec into an executable MuJoCo MJCF XML string."""
+    asset_lines, col_names, mat_names = _collect_mesh_assets(scene, include_floor=include_floor)
     lines = [
         f'<mujoco model="{escape(scene.case_id)}">',
         '  <option gravity="0 0 -9.81" timestep="0.005"/>',
         '  <visual><rgba haze="0 0 0 0"/></visual>',
-        "  <worldbody>",
-        '    <light pos="0.5 -1.2 1.8" dir="-0.2 0.6 -0.8" diffuse="0.9 0.9 0.9"/>',
-        '    <light pos="-1.0 1.0 1.5" dir="0.4 -0.4 -0.8" diffuse="0.5 0.5 0.5"/>',
     ]
+    if asset_lines:
+        lines.append("  <asset>")
+        lines.extend(asset_lines)
+        lines.append("  </asset>")
+    lines.extend(
+        [
+            "  <worldbody>",
+            '    <light pos="0.5 -1.2 1.8" dir="-0.2 0.6 -0.8" diffuse="0.9 0.9 0.9"/>',
+            '    <light pos="-1.0 1.0 1.5" dir="0.4 -0.4 -0.8" diffuse="0.5 0.5 0.5"/>',
+        ]
+    )
     if include_floor:
         lines.append(
             f'    <geom name="floor" type="plane" pos="0 0 {scene.floor_z:.4f}" '
@@ -127,15 +210,11 @@ def build_mjcf_xml(scene: CoarseSceneSpec, include_floor: bool = True) -> str:
         pos_s = " ".join(f"{v:.4f}" for v in kf0.position)
         quat_s = " ".join(f"{v:.5f}" for v in _euler_to_quat_wxyz(kf0.euler_xyz))
         rgba_s = " ".join(f"{v:.4f}" for v in obj.color_rgba)
-        geom_type, size_s = _geom_type_and_size_str(obj)
         safe_id = escape(obj.object_id)
         lines.append(f'    <body name="{safe_id}" pos="{pos_s}" quat="{quat_s}">')
         if obj.is_dynamic:
             lines.append(f'      <freejoint name="{safe_id}_jnt"/>')
-        lines.append(
-            f'      <geom name="{safe_id}_geom" type="{geom_type}" size="{size_s}" '
-            f'mass="{obj.mass_kg:.4f}" friction="{obj.friction:.3f} 0.01 0.001" rgba="{rgba_s}"/>'
-        )
+        _append_object_geoms(lines, obj, safe_id, rgba_s, include_floor, col_names, mat_names)
         lines.append("    </body>")
 
     lines.extend(["  </worldbody>", "</mujoco>"])
@@ -243,9 +322,10 @@ def render_coarse_scene_mujoco(
             adr = joint_qpos_adr(model, f"{obj.object_id}_jnt")
             if adr is not None:
                 body_qpos_adr[obj.object_id] = adr
-        geom_id = geom_name_id(model, f"{obj.object_id}_geom")
-        if geom_id is not None:
-            geom_base_sizes[obj.object_id] = (geom_id, model.geom_size[geom_id].copy())
+        if not obj.visual_mesh_path:
+            geom_id = geom_name_id(model, f"{obj.object_id}_geom")
+            if geom_id is not None:
+                geom_base_sizes[obj.object_id] = (geom_id, model.geom_size[geom_id].copy())
 
     available_cams = {cam.name for cam in scene.cameras}
     active_views = [v for v in views if v in available_cams]

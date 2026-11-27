@@ -65,6 +65,25 @@ def resolve_blender_bin(configured: str | None = None) -> str:
     return blender_bin
 
 
+def resolve_triposr_dir(configured: Path | None = None) -> Path:
+    """Resolve the local TripoSR repository directory from config, TRIPOSR_DIR, or workspace."""
+    if configured is not None:
+        return configured.resolve()
+    env_dir = os.environ.get("TRIPOSR_DIR")
+    if env_dir and env_dir.strip():
+        return Path(env_dir.strip()).resolve()
+    root = Path(os.environ.get("REAL2SIM_ROOT", ".")).resolve()
+    return (root / "tools" / "TripoSR").resolve()
+
+
+def resolve_geom3d_device() -> str:
+    """Resolve preferred PyTorch device for Image-to-3D mesh lifting."""
+    env_dev = os.environ.get("REAL2SIM_GEOM3D_DEVICE")
+    if env_dev and env_dev.strip():
+        return env_dev.strip()
+    return "cuda:0"
+
+
 class VlmConfig(BaseModel):
     """Configuration for an OpenAI-compatible Vision-Language Model endpoint."""
 

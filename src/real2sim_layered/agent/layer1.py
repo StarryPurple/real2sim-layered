@@ -25,7 +25,11 @@ from real2sim_layered.sim import (
     render_coarse_scene_mujoco,
     run_blender_scene,
 )
-from real2sim_layered.tools import load_rgba_frame, sample_frame_indices
+from real2sim_layered.tools import (
+    get_default_mesh_lifter,
+    load_rgba_frame,
+    sample_frame_indices,
+)
 
 _MATERIAL_PRIORS: dict[str, tuple[float, float]] = {
     "rigid_solid": (0.35, 0.65),
@@ -214,11 +218,60 @@ def _match_regions_to_previous(
     return matched
 
 
+def _extract_object_rgba_crops(
+    rgba_full: np.ndarray,
+    regions: list[_RegionStats],
+) -> list[np.ndarray]:
+    """Crop per-object segmented RGBA patches from frame 0 for Image-to-3D lifting."""
+    h, w, _ = rgba_full.shape
+    mask = rgba_full[..., 3] >= 0.5
+    if not np.any(mask):
+        return [rgba_full for _ in regions]
+
+    if len(regions) <= 1:
+        ys, xs = np.nonzero(mask)
+        return [rgba_full[int(ys.min()) : int(ys.max()) + 1, int(xs.min()) : int(xs.max()) + 1]]
+
+    ys_all, xs_all = np.nonzero(mask)
+    pts_x = xs_all.astype(np.float64) / float(w)
+    pts_y = ys_all.astype(np.float64) / float(h)
+    pts_rgb = rgba_full[ys_all, xs_all, :3].astype(np.float64)
+
+    dists = np.stack(
+        [
+            (pts_x - r[0]) ** 2
+            + (pts_y - r[1]) ** 2
+            + 0.35 * np.sum((pts_rgb - np.array(r[5][:3])) ** 2, axis=1)
+            for r in regions
+        ],
+        axis=0,
+    )
+    assign = np.argmin(dists, axis=0)
+
+    crops: list[np.ndarray] = []
+    for obj_i in range(len(regions)):
+        sel = assign == obj_i
+        if int(sel.sum()) < 24:
+            ys, xs = ys_all, xs_all
+            obj_mask = mask
+        else:
+            ys, xs = ys_all[sel], xs_all[sel]
+            obj_mask = np.zeros((h, w), dtype=bool)
+            obj_mask[ys, xs] = True
+        y0, y1 = int(ys.min()), int(ys.max()) + 1
+        x0, x1 = int(xs.min()), int(xs.max()) + 1
+        patch = rgba_full[y0:y1, x0:x1].copy()
+        patch[~obj_mask[y0:y1, x0:x1], 3] = 0.0
+        crops.append(patch)
+    return crops
+
+
 def synthesize_coarse_scene(
     case: MvoikCase,
     ikg: InteractionGraph,
     backend: AssetBackend,
     max_frames: int = 8,
+    asset_dir: Path | None = None,
 ) -> CoarseSceneSpec:
     """Fuse VLM InteractionGraph (G_int) and RGBA visual cues into CoarseSceneSpec (S_0)."""
     frame_indices = sample_frame_indices(case.num_frames, max_frames=max_frames)
@@ -229,12 +282,15 @@ def synthesize_coarse_scene(
     per_obj_sizes: list[list[tuple[float, float, float]]] = [[] for _ in range(num_objs)]
     per_obj_colors: list[list[RgbaColor]] = [[] for _ in range(num_objs)]
     prev_regions: list[_RegionStats] | None = None
+    frame0_regions: list[_RegionStats] = []
 
     for frame_idx in frame_indices:
         rgba = load_rgba_frame(case.input_frames[frame_idx], target_size=(160, 120))
         regions = _match_regions_to_previous(
             _split_object_regions(rgba, num_objects=num_objs), prev_regions
         )
+        if not frame0_regions:
+            frame0_regions = regions
         prev_regions = regions
         for obj_i, (cx, cy, bw, bh, roll, color) in enumerate(regions):
             depth_offset = (obj_i - 0.5 * (num_objs - 1)) * 0.05
@@ -247,22 +303,50 @@ def synthesize_coarse_scene(
             per_obj_sizes[obj_i].append(half_ext)
             per_obj_colors[obj_i].append(color)
 
+    crops_3d: list[np.ndarray] = []
+    resolved_asset_dir = asset_dir or (Path("outputs") / "assets_image_to_3d" / case.case_id)
+    if backend == AssetBackend.IMAGE_TO_3D_SIM:
+        rgba_full0 = load_rgba_frame(case.input_frames[frame_indices[0]])
+        crops_3d = _extract_object_rgba_crops(rgba_full0, frame0_regions)
+
     scene_objects: list[SceneObjectSpec] = []
     for obj_i, entity in enumerate(ikg.objects):
         size_arr = np.median(np.array(per_obj_sizes[obj_i], dtype=np.float64), axis=0)
         color_arr = np.median(np.array(per_obj_colors[obj_i], dtype=np.float64), axis=0)
         mass, friction = _MATERIAL_PRIORS.get(entity.material_hint, (0.30, 0.65))
+        size_m = (float(size_arr[0]), float(size_arr[1]), float(size_arr[2]))
+        color_rgba: RgbaColor = (float(color_arr[0]), float(color_arr[1]), float(color_arr[2]), 1.0)
+        vis_mesh: str | None = None
+        tex_path: str | None = None
+        col_meshes: list[str] = []
+
+        if backend == AssetBackend.IMAGE_TO_3D_SIM and obj_i < len(crops_3d):
+            asset = get_default_mesh_lifter().lift_rgba_crop(
+                rgba_crop=crops_3d[obj_i],
+                target_size_m=size_m,
+                out_dir=resolved_asset_dir,
+                asset_id=f"{case.case_id}_{entity.object_id}",
+            )
+            vis_mesh = str(asset.visual_mesh_path)
+            tex_path = str(asset.texture_path)
+            col_meshes = [str(p) for p in asset.collision_mesh_paths]
+            size_m = asset.half_extents_m
+            color_rgba = asset.mean_rgba
+
         scene_objects.append(
             SceneObjectSpec(
                 object_id=entity.object_id,
                 label=entity.label,
                 primitive=_PRIMITIVE_MAP.get(entity.primitive_proxy.strip().lower(), "box"),
-                size_m=(float(size_arr[0]), float(size_arr[1]), float(size_arr[2])),
-                color_rgba=(float(color_arr[0]), float(color_arr[1]), float(color_arr[2]), 1.0),
+                size_m=size_m,
+                color_rgba=color_rgba,
                 mass_kg=mass,
                 friction=friction,
                 is_dynamic=entity.is_dynamic,
                 material_hint=entity.material_hint,
+                visual_mesh_path=vis_mesh,
+                texture_path=tex_path,
+                collision_mesh_paths=col_meshes,
                 keyframes=per_obj_kfs[obj_i],
             )
         )

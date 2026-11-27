@@ -57,15 +57,29 @@ def _step_contact_summary(model: Any, data: Any) -> tuple[float, set[int]]:
     return max_pen, touching_bodies
 
 
-def _body_half_heights(model: Any, dynamic_body_ids: list[int]) -> dict[int, float]:
-    """Estimate vertical half-extent per dynamic body from its attached geoms."""
+def _body_half_heights(
+    model: Any,
+    dynamic_body_ids: list[int],
+    scene: CoarseSceneSpec | None = None,
+) -> dict[int, float]:
+    """Estimate vertical half-extent per dynamic body from scene spec or attached geoms."""
     half_z: dict[int, float] = {bid: 0.05 for bid in dynamic_body_ids}
+    scene_hz_by_name = (
+        {obj.object_id: float(obj.size_m[2]) for obj in scene.objects} if scene else {}
+    )
+    for bid in dynamic_body_ids:
+        bname = str(model.body(bid).name)
+        if bname in scene_hz_by_name:
+            half_z[bid] = max(0.01, scene_hz_by_name[bname])
+            continue
     for geom_id in range(int(model.ngeom)):
         bid = int(model.geom_bodyid[geom_id])
-        if bid not in half_z:
+        if bid not in half_z or str(model.body(bid).name) in scene_hz_by_name:
             continue
         size = model.geom_size[geom_id]
         hz = float(size[2]) if float(size[2]) > 0.0 else float(size[0])
+        if hz <= 0.0:
+            hz = float(model.geom_rbound[geom_id])
         half_z[bid] = max(0.01, hz)
     return half_z
 
@@ -128,7 +142,7 @@ def _evaluate_delivered_keyframes(
     dynamic_body_ids = [
         body_id for body_id in range(1, model.nbody) if model.body_dofnum[body_id] > 0
     ]
-    body_hz = _body_half_heights(model, dynamic_body_ids)
+    body_hz = _body_half_heights(model, dynamic_body_ids, scene=delivered_scene)
     qpos_adrs = {
         obj.object_id: joint_qpos_adr(model, f"{obj.object_id}_jnt")
         for obj in delivered_scene.objects
@@ -205,6 +219,7 @@ def _step_and_collect(
     num_steps: int,
     perturb_vel: float = 0.0,
     floor_z: float = 0.0,
+    scene: CoarseSceneSpec | None = None,
 ) -> tuple[bool, bool, float, float, float, list[str]]:
     """Run free MuJoCo rollout from initial state and collect per-body stability diagnostics."""
     data = new_mj_data(model)
@@ -214,7 +229,7 @@ def _step_and_collect(
     dynamic_body_ids = [
         body_id for body_id in range(1, model.nbody) if model.body_dofnum[body_id] > 0
     ]
-    body_hz = _body_half_heights(model, dynamic_body_ids)
+    body_hz = _body_half_heights(model, dynamic_body_ids, scene=scene)
 
     max_penetration = 0.0
     floating_body_steps = 0
@@ -263,13 +278,10 @@ def evaluate_mujoco_scene(
 ) -> PhysicsMetrics:
     """Verify delivered multi-frame trajectory plus free-rollout counterfactual survival."""
     model = load_mjcf_model(mjcf_xml)
-    floor_z = (
-        delivered_scene.floor_z
-        if delivered_scene is not None
-        else (scene.floor_z if scene is not None else 0.0)
-    )
+    active_scene = delivered_scene or scene
+    floor_z = active_scene.floor_z if active_scene is not None else 0.0
     finite_ok, bounds_ok, roll_pen, roll_float, stability, notes = _step_and_collect(
-        model, num_steps=num_steps, perturb_vel=0.0, floor_z=floor_z
+        model, num_steps=num_steps, perturb_vel=0.0, floor_z=floor_z, scene=active_scene
     )
 
     if delivered_scene is not None:
@@ -284,7 +296,11 @@ def evaluate_mujoco_scene(
         track_err = 0.0
 
     cf_finite, cf_bounds, cf_pen, cf_float, _, _ = _step_and_collect(
-        model, num_steps=num_steps, perturb_vel=counterfactual_perturb_vel, floor_z=floor_z
+        model,
+        num_steps=num_steps,
+        perturb_vel=counterfactual_perturb_vel,
+        floor_z=floor_z,
+        scene=active_scene,
     )
     counterfactual_ok = cf_finite and cf_bounds and cf_pen < 0.03 and cf_float < 0.5
     if max_pen > 0.02:

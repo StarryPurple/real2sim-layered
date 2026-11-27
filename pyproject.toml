@@ -37,6 +37,12 @@ vlm = [
     "fastapi>=0.115.0",
     "uvicorn>=0.34.0",
 ]
+geom3d = [
+    "coacd>=1.0.0",
+    "scikit-image>=0.24.0",
+    "einops>=0.8.0",
+    "omegaconf>=2.3.0",
+]
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128" }]
@@ -133,8 +139,8 @@ extend_exclude = [
 ]
 
 [tool.deptry.per_rule_ignores]
-# transformers runtime plugins (accelerate, qwen-vl-utils) and reserved Layer 2-3 media/vision deps
-DEP002 = ["accelerate", "qwen-vl-utils", "torchvision", "imageio", "pyyaml", "matplotlib"]
+# transformers/TripoSR runtime plugins and reserved Layer 2-3 media/vision deps
+DEP002 = ["accelerate", "qwen-vl-utils", "einops", "torchvision", "imageio", "pyyaml", "matplotlib"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -225,11 +225,16 @@ def _cmd_run_layer1(
     max_frames: int,
     case_ids: list[str] | None,
 ) -> None:
-    backends = (
-        [AssetBackend.SIM_PROXY, AssetBackend.PROCEDURAL_BLENDER]
-        if backend_arg == "both"
-        else [AssetBackend(backend_arg)]
-    )
+    if backend_arg == "both":
+        backends = [AssetBackend.SIM_PROXY, AssetBackend.PROCEDURAL_BLENDER]
+    elif backend_arg == "all":
+        backends = [
+            AssetBackend.SIM_PROXY,
+            AssetBackend.PROCEDURAL_BLENDER,
+            AssetBackend.IMAGE_TO_3D_SIM,
+        ]
+    else:
+        backends = [AssetBackend(backend_arg)]
     reports: list[DualAxisReport] = []
     for case in _select_cases(cfg, case_ids):
         ikg, tokens_used = _load_or_extract_ikg(
@@ -241,7 +246,11 @@ def _cmd_run_layer1(
         for backend in backends:
             t0 = time.perf_counter()
             scene = synthesize_coarse_scene(
-                case=case, ikg=ikg, backend=backend, max_frames=max_frames
+                case=case,
+                ikg=ikg,
+                backend=backend,
+                max_frames=max_frames,
+                asset_dir=cfg.outputs_root / "assets_image_to_3d" / case.case_id,
             )
             ctx = _CaseEvalContext(case, scene, eval_indices, gt_by_view, tokens_used)
             reports.append(
@@ -278,7 +287,11 @@ def _cmd_run_ablation(
         # Arm 1: L1 only
         t1 = time.perf_counter()
         l1_scene = synthesize_coarse_scene(
-            case=case, ikg=ikg, backend=backend, max_frames=max_frames
+            case=case,
+            ikg=ikg,
+            backend=backend,
+            max_frames=max_frames,
+            asset_dir=cfg.outputs_root / "assets_image_to_3d" / case.case_id,
         )
         ctx = _CaseEvalContext(case, l1_scene, eval_indices, gt_by_view, tokens_used)
         reports.append(
@@ -368,7 +381,7 @@ def main(argv: list[str] | None = None) -> None:
     p_l1 = sub.add_parser("run-layer1", help="Run Layer-1 coarse Real2Sim baseline on probe cases.")
     p_l1.add_argument(
         "--backend",
-        choices=["sim_proxy", "procedural_blender", "both"],
+        choices=["sim_proxy", "procedural_blender", "image_to_3d_sim", "both", "all"],
         default="both",
         help="Geometry backend(s) to materialize and evaluate.",
     )
@@ -382,7 +395,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     p_ab.add_argument(
         "--backend",
-        choices=["sim_proxy", "procedural_blender"],
+        choices=["sim_proxy", "procedural_blender", "image_to_3d_sim"],
         default="sim_proxy",
     )
     p_ab.add_argument("--ikg-dir", type=Path, default=None, help="Cached InteractionGraph dir.")
