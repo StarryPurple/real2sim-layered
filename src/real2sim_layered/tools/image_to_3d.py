@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
-import coacd
 import numpy as np
 import torch
 import trimesh
@@ -207,6 +206,9 @@ def decompose_and_export_mesh(
 
     vis_path = (out_dir / f"{asset_id}_visual.obj").resolve()
     _write_obj(vis_path, verts, faces, uvs=uvs)
+
+    # Lazy-import coacd after torch so libgomp TLS initializes under PyTorch without SIGSEGV.
+    import coacd
 
     coacd_api = cast(Any, coacd)
     coacd_api.set_log_level("error")

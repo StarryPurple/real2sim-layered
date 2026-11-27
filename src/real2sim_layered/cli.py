@@ -136,15 +136,20 @@ def _cmd_extract_ikg(
     case_ids: list[str] | None,
     max_frames: int,
     out_dir: Path | None,
+    all_cases: bool = False,
+    skip_existing: bool = True,
 ) -> None:
     client = OpenAICompatVlmClient(cfg.vlm)
     dest = out_dir or (cfg.outputs_root / "ikg_probe")
     dest.mkdir(parents=True, exist_ok=True)
 
-    for case in _select_cases(cfg, case_ids):
+    for case in _select_cases(cfg, case_ids, all_cases=all_cases):
+        out_file = dest / f"{case.case_id}.json"
+        if skip_existing and out_file.is_file():
+            print(f"[SKIP] {case.case_id} already cached at {out_file}")
+            continue
         t0 = time.perf_counter()
         result = client.extract_ikg(case, max_frames=max_frames)
-        out_file = dest / f"{case.case_id}.json"
         out_file.write_text(result.graph.model_dump_json(indent=2) + "\n", encoding="utf-8")
         print(
             f"[OK] {case.case_id} -> regime={result.graph.dominant_regime} "
@@ -377,6 +382,10 @@ def main(argv: list[str] | None = None) -> None:
     p_ikg.add_argument("--case", action="append", default=None, help="Optional case ID filter.")
     p_ikg.add_argument("--max-frames", type=int, default=6, help="Sampled frames per clip.")
     p_ikg.add_argument("--out-dir", type=Path, default=None, help="Output directory for JSONs.")
+    p_ikg.add_argument("--all-cases", action="store_true", help="Run on all cases in with_gt.")
+    p_ikg.add_argument(
+        "--overwrite", action="store_true", help="Re-extract even when cached JSON exists."
+    )
 
     p_l1 = sub.add_parser("run-layer1", help="Run Layer-1 coarse Real2Sim baseline on probe cases.")
     p_l1.add_argument(
@@ -417,6 +426,8 @@ def main(argv: list[str] | None = None) -> None:
             case_ids=args.case,
             max_frames=args.max_frames,
             out_dir=args.out_dir,
+            all_cases=args.all_cases,
+            skip_existing=not args.overwrite,
         )
     elif args.command == "run-layer1":
         _cmd_run_layer1(

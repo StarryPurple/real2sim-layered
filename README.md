@@ -2,7 +2,7 @@
 
 Layered common-sense Real2Sim agent with local physics escalation and anomaly fallback for reconstructing dynamic 4D multi-object interactions from monocular video on **MVOIK-4D**.
 
-> **Project status**: MVOIK-4D `with_gt` loader, 5-case cross-regime probe set, delivered-trajectory MuJoCo+RGBA dual-axis evaluator, local `Qwen/Qwen3.5-4B` OpenAI-compatible VLM pipeline, and the full **Layer-1 → Layer-2 (local physics escalation) → Layer-3 (pre-commit gated anomaly fallback)** pipeline across all three geometry backends (`sim_proxy`, `procedural_blender`, and TripoSR+CoACD `image_to_3d_sim`) are operational. Full 30-case `with_gt` ablations are next.
+> **Project status**: MVOIK-4D `with_gt` loader, 5-case cross-regime probe set, delivered-trajectory MuJoCo+RGBA dual-axis evaluator, local `Qwen/Qwen3.5-4B` OpenAI-compatible VLM pipeline, and the full **Layer-1 → Layer-2 (local physics escalation) → Layer-3 (pre-commit gated anomaly fallback)** pipeline across all three geometry backends (`sim_proxy`, `procedural_blender`, and TripoSR+CoACD `image_to_3d_sim`) are operational and benchmarked across all 30 `with_gt` cases (360 runs).
 
 ## Quick start
 
