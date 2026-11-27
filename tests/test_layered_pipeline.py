@@ -24,7 +24,11 @@ from real2sim_layered.schemas import (
     PhysicalRegime,
     SceneObjectSpec,
 )
-from real2sim_layered.sim import build_mjcf_xml, evaluate_mujoco_scene
+from real2sim_layered.sim import (
+    build_mjcf_xml,
+    evaluate_mujoco_scene,
+    render_coarse_scene_mujoco,
+)
 
 
 def _make_frames_case(tmp_path: Path, squash: bool = False) -> MvoikCase:
@@ -34,9 +38,9 @@ def _make_frames_case(tmp_path: Path, squash: bool = False) -> MvoikCase:
     for idx in range(4):
         arr = np.zeros((60, 80, 4), dtype=np.uint8)
         if squash:
-            # Strongly compress height across frames to simulate elastic squashing.
-            half_h = max(4, 18 - idx * 4)
-            arr[45 - half_h : 45, 25 - idx * 2 : 55 + idx * 2, :] = [50, 200, 90, 255]
+            # Strongly compress height from top while anchoring bottom near camera center.
+            half_h = max(4, 14 - idx * 3)
+            arr[36 - half_h : 36, 32 - idx * 2 : 48 + idx * 2, :] = [50, 200, 90, 255]
         else:
             shift = idx * 3
             arr[25:45, 22 + shift : 42 + shift, :] = [40, 180, 70, 255]
@@ -163,7 +167,7 @@ def test_layer3_triggers_deformable_fallback_on_squashing_clip(tmp_path: Path) -
                 label="ball",
                 primitive="sphere",
                 size_m=(0.07, 0.07, 0.07),
-                keyframes=[KeyframePose(frame_idx=i, position=(0.0, 0.0, 0.08)) for i in range(4)],
+                keyframes=[KeyframePose(frame_idx=i, position=(0.0, 0.0, 0.14)) for i in range(4)],
             )
         ],
     )
@@ -182,3 +186,91 @@ def test_layer3_triggers_deformable_fallback_on_squashing_clip(tmp_path: Path) -
     assert report.fallback_mode == "fallback_deformable"
     assert report.non_rigid_shape_cv > 0.1
     assert l3_scene.objects[0].keyframes[-1].scale != (1.0, 1.0, 1.0)
+
+
+def test_delivered_trajectory_eval_catches_late_frame_penetration() -> None:
+    """Two scenes with identical frame 0 MUST differ when one penetrates on later frames."""
+    cams = build_canonical_cameras()
+    clean_scene = CoarseSceneSpec(
+        case_id="clean_traj",
+        backend=AssetBackend.SIM_PROXY,
+        regime=PhysicalRegime.RIGID,
+        num_frames=4,
+        cameras=cams,
+        objects=[
+            SceneObjectSpec(
+                object_id="blk",
+                label="block",
+                size_m=(0.05, 0.05, 0.05),
+                keyframes=[KeyframePose(frame_idx=i, position=(0.0, 0.0, 0.055)) for i in range(4)],
+            )
+        ],
+    )
+    bad_scene = clean_scene.model_copy(
+        update={
+            "objects": [
+                clean_scene.objects[0].model_copy(
+                    update={
+                        "keyframes": [
+                            KeyframePose(frame_idx=0, position=(0.0, 0.0, 0.055)),
+                            KeyframePose(frame_idx=1, position=(0.0, 0.0, 0.055)),
+                            KeyframePose(frame_idx=2, position=(0.0, 0.0, -0.02)),
+                            KeyframePose(frame_idx=3, position=(0.0, 0.0, -0.02)),
+                        ]
+                    }
+                )
+            ]
+        }
+    )
+    xml = build_mjcf_xml(clean_scene, include_floor=True)
+    p_clean = evaluate_mujoco_scene(
+        xml, num_steps=40, scene=clean_scene, delivered_scene=clean_scene
+    )
+    p_bad = evaluate_mujoco_scene(xml, num_steps=40, scene=clean_scene, delivered_scene=bad_scene)
+    assert p_bad.max_penetration_m > p_clean.max_penetration_m + 0.04
+    assert p_bad.trajectory_tracking_err_m > p_clean.trajectory_tracking_err_m
+
+
+def test_mujoco_renderer_applies_keyframe_scale() -> None:
+    scene = CoarseSceneSpec(
+        case_id="scale_render",
+        backend=AssetBackend.SIM_PROXY,
+        regime=PhysicalRegime.DEFORMABLE,
+        num_frames=2,
+        cameras=build_canonical_cameras(),
+        objects=[
+            SceneObjectSpec(
+                object_id="ball",
+                label="ball",
+                primitive="box",
+                size_m=(0.06, 0.06, 0.06),
+                keyframes=[
+                    KeyframePose(frame_idx=0, position=(0.0, 0.0, 0.14), scale=(1.0, 1.0, 1.0)),
+                    KeyframePose(frame_idx=1, position=(0.0, 0.0, 0.14), scale=(1.8, 1.8, 0.5)),
+                ],
+            )
+        ],
+    )
+    frames = render_coarse_scene_mujoco(
+        scene, frame_indices=[0, 1], views=["eval_0"], width=80, height=60
+    )["eval_0"]
+    assert not np.array_equal(frames[0][..., 3] >= 0.5, frames[1][..., 3] >= 0.5)
+
+
+def test_topological_fallback_splits_cuttable_object() -> None:
+    from real2sim_layered.agent.layer3 import _apply_topological_split
+
+    apple = SceneObjectSpec(
+        object_id="apple",
+        label="apple",
+        primitive="sphere",
+        size_m=(0.06, 0.06, 0.06),
+        material_hint="fruit_cuttable",
+        keyframes=[KeyframePose(frame_idx=i, position=(0.0, 0.0, 0.08)) for i in range(4)],
+    )
+    parts = _apply_topological_split([apple], floor_z=0.0)
+    assert len(parts) == 2
+    assert {p.object_id for p in parts} == {"apple_part_a", "apple_part_b"}
+    assert abs(parts[0].keyframes[-1].position[0] - parts[1].keyframes[-1].position[0]) > abs(
+        parts[0].keyframes[0].position[0] - parts[1].keyframes[0].position[0]
+    )

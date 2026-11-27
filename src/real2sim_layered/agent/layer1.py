@@ -191,6 +191,29 @@ def _backproject_to_world(
     return (wx, depth_offset_m, wz), (hx, hy, hz)
 
 
+def _match_regions_to_previous(
+    regions: list[_RegionStats],
+    prev_regions: list[_RegionStats] | None,
+) -> list[_RegionStats]:
+    """Greedily match current frame regions to previous identities via XY + RGB proximity."""
+    if prev_regions is None or len(regions) != len(prev_regions) or len(regions) <= 1:
+        return regions
+    remaining = list(range(len(regions)))
+    matched: list[_RegionStats] = []
+    for p_cx, p_cy, _, _, _, p_col in prev_regions:
+        best_i = min(
+            remaining,
+            key=lambda idx: (
+                (regions[idx][0] - p_cx) ** 2
+                + (regions[idx][1] - p_cy) ** 2
+                + 0.4 * sum((regions[idx][5][c] - p_col[c]) ** 2 for c in range(3))
+            ),
+        )
+        remaining.remove(best_i)
+        matched.append(regions[best_i])
+    return matched
+
+
 def synthesize_coarse_scene(
     case: MvoikCase,
     ikg: InteractionGraph,
@@ -205,12 +228,15 @@ def synthesize_coarse_scene(
     per_obj_kfs: list[list[KeyframePose]] = [[] for _ in range(num_objs)]
     per_obj_sizes: list[list[tuple[float, float, float]]] = [[] for _ in range(num_objs)]
     per_obj_colors: list[list[RgbaColor]] = [[] for _ in range(num_objs)]
+    prev_regions: list[_RegionStats] | None = None
 
     for frame_idx in frame_indices:
         rgba = load_rgba_frame(case.input_frames[frame_idx], target_size=(160, 120))
-        for obj_i, (cx, cy, bw, bh, roll, color) in enumerate(
-            _split_object_regions(rgba, num_objects=num_objs)
-        ):
+        regions = _match_regions_to_previous(
+            _split_object_regions(rgba, num_objects=num_objs), prev_regions
+        )
+        prev_regions = regions
+        for obj_i, (cx, cy, bw, bh, roll, color) in enumerate(regions):
             depth_offset = (obj_i - 0.5 * (num_objs - 1)) * 0.05
             pos, half_ext = _backproject_to_world(
                 (cx, cy, bw, bh), depth_offset_m=depth_offset, aspect=aspect

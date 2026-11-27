@@ -141,6 +141,7 @@ def evaluate_case_dual_axis(
     gt_by_view: dict[str, list[np.ndarray]] | None = None,
     mjcf_xml: str | None = None,
     scene: CoarseSceneSpec | None = None,
+    delivered_scene: CoarseSceneSpec | None = None,
     meta: EvalRunMeta | None = None,
 ) -> DualAxisReport:
     """Compute a DualAxisReport combining visual metrics and MuJoCo physics diagnostics."""
@@ -151,7 +152,12 @@ def evaluate_case_dual_axis(
 
     physics: PhysicsMetrics | None = None
     if mjcf_xml is not None:
-        physics = evaluate_mujoco_scene(mjcf_xml, num_steps=run_meta.physics_steps, scene=scene)
+        physics = evaluate_mujoco_scene(
+            mjcf_xml,
+            num_steps=run_meta.physics_steps,
+            scene=scene,
+            delivered_scene=delivered_scene,
+        )
 
     return DualAxisReport(
         case_id=case.case_id,

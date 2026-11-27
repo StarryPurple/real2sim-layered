@@ -90,8 +90,9 @@ def test_layer1_sim_proxy_compiles_renders_and_verifies(tmp_path: Path) -> None:
     assert g > r
     assert g > b
 
-    pos_mid, _ = interpolate_object_pose(scene.objects[0].keyframes, 1)
+    pos_mid, _, scl_mid = interpolate_object_pose(scene.objects[0].keyframes, 1)
     assert len(pos_mid) == 3
+    assert scl_mid == (1.0, 1.0, 1.0)
 
     xml = build_mjcf_xml(scene, include_floor=True)
     phys = evaluate_mujoco_scene(xml, num_steps=60)

@@ -1,4 +1,4 @@
-"""Layer-2 local physics escalation (E_phys) and dual-source window selection."""
+"""Layer-2 local physics escalation (E_phys) with support-plane alignment and visual guard."""
 
 from __future__ import annotations
 
@@ -20,13 +20,14 @@ from real2sim_layered.schemas import (
 from real2sim_layered.sim import (
     build_mjcf_xml,
     evaluate_mujoco_scene,
+    render_coarse_scene_mujoco,
     simulate_mujoco_keyframes,
 )
 from real2sim_layered.tools import load_rgba_frame
 
 _CONTACT_MARGIN_M = 0.004
 _PENETRATION_TARGET_M = 0.015
-_FLOATING_TARGET = 0.15
+_FLOATING_TARGET = 0.25
 
 
 def detect_escalation_windows(
@@ -46,7 +47,6 @@ def detect_escalation_windows(
             end = max(start, min(case.num_frames - 1, interval.end_frame))
             vlm_windows.append((start, end))
 
-    # VLM-independent visual motion/silhouette change detector catches VLM regime misses.
     centroids: list[tuple[float, float]] = []
     areas: list[float] = []
     for f_idx in frame_indices:
@@ -71,23 +71,19 @@ def detect_escalation_windows(
     vis_window = (min(visual_active), max(visual_active)) if visual_active else None
 
     if vlm_windows and vis_window is not None:
-        s = min(min(w[0] for w in vlm_windows), vis_window[0])
-        e = max(max(w[1] for w in vlm_windows), vis_window[1])
         return [
             EscalationWindow(
-                start_frame=s,
-                end_frame=e,
+                start_frame=min(min(w[0] for w in vlm_windows), vis_window[0]),
+                end_frame=max(max(w[1] for w in vlm_windows), vis_window[1]),
                 source="both",
                 reason="Union of VLM interaction interval and visual motion/area trigger.",
             )
         ]
     if vlm_windows:
-        s = min(w[0] for w in vlm_windows)
-        e = max(w[1] for w in vlm_windows)
         return [
             EscalationWindow(
-                start_frame=s,
-                end_frame=e,
+                start_frame=min(w[0] for w in vlm_windows),
+                end_frame=max(w[1] for w in vlm_windows),
                 source="vlm_ikg",
                 reason="Flagged by VLM InteractionGraph contact/physics interval.",
             )
@@ -112,32 +108,38 @@ def detect_escalation_windows(
 
 
 def _rotated_half_extents(
-    obj: SceneObjectSpec, euler_xyz: tuple[float, float, float]
+    obj: SceneObjectSpec,
+    euler_xyz: tuple[float, float, float],
 ) -> tuple[float, float, float]:
     """Conservative axis-aligned half-extents accounting for pitch/roll tilt."""
     hx, hy, hz = obj.size_m
     pitch = abs(euler_xyz[1])
     cp, sp = abs(math.cos(pitch)), abs(math.sin(pitch))
-    eff_x = hx * cp + hz * sp
-    eff_z = hx * sp + hz * cp
-    return (eff_x, hy, eff_z)
+    return (hx * cp + hz * sp, hy, hx * sp + hz * cp)
 
 
 def _resolve_initial_contacts(scene: CoarseSceneSpec, separation_scale: float) -> CoarseSceneSpec:
-    """Repair ground penetration and pairwise AABB overlaps using rotated extents."""
+    """Anchor support plane `floor_z` under observed objects and clear pairwise AABB overlaps."""
     updated_objs: list[SceneObjectSpec] = [obj.model_copy(deep=True) for obj in scene.objects]
 
-    # 1. Floor support grounding on every keyframe using rotated vertical half-extent.
+    # 1. Estimate support plane directly beneath the lowest frame-0 object bottom so grounding
+    # removes underground penetration WITHOUT shifting objects upward out of camera framing.
+    frame0_bottoms = [
+        obj.keyframes[0].position[2] - _rotated_half_extents(obj, obj.keyframes[0].euler_xyz)[2]
+        for obj in updated_objs
+    ]
+    calibrated_floor_z = min(frame0_bottoms) - _CONTACT_MARGIN_M
+
     for obj in updated_objs:
         repaired_kfs: list[KeyframePose] = []
         for kf in obj.keyframes:
             _, _, eff_hz = _rotated_half_extents(obj, kf.euler_xyz)
-            min_z = scene.floor_z + eff_hz + _CONTACT_MARGIN_M
+            min_z = calibrated_floor_z + eff_hz + _CONTACT_MARGIN_M
             x, y, z = kf.position
             repaired_kfs.append(kf.model_copy(update={"position": (x, y, max(min_z, z))}))
         obj.keyframes = repaired_kfs
 
-    # 2. Pairwise AABB separation on frame 0 until all overlaps clear.
+    # 2. Separate pairwise overlaps on frame 0 (preferring depth Y to preserve input-view X/Z).
     num_objs = len(updated_objs)
     offsets = [np.zeros(3, dtype=np.float64) for _ in range(num_objs)]
     extents = [
@@ -155,7 +157,7 @@ def _resolve_initial_contacts(scene: CoarseSceneSpec, separation_scale: float) -
                 if np.all(overlap > 0.0):
                     axis = (
                         1
-                        if overlap[1] <= min(overlap[0], overlap[2]) * 1.6
+                        if overlap[1] <= min(overlap[0], overlap[2]) * 2.0
                         else int(np.argmin(overlap))
                     )
                     sign = 1.0 if delta[axis] >= 0.0 else -1.0
@@ -173,7 +175,7 @@ def _resolve_initial_contacts(scene: CoarseSceneSpec, separation_scale: float) -
         repaired_kfs = []
         for kf in obj.keyframes:
             _, _, eff_hz = _rotated_half_extents(obj, kf.euler_xyz)
-            min_z = scene.floor_z + eff_hz + _CONTACT_MARGIN_M
+            min_z = calibrated_floor_z + eff_hz + _CONTACT_MARGIN_M
             repaired_kfs.append(
                 kf.model_copy(
                     update={
@@ -187,14 +189,14 @@ def _resolve_initial_contacts(scene: CoarseSceneSpec, separation_scale: float) -
             )
         obj.keyframes = repaired_kfs
 
-    return scene.model_copy(update={"objects": updated_objs})
+    return scene.model_copy(update={"floor_z": calibrated_floor_z, "objects": updated_objs})
 
 
 def _blend_window_trajectories(
     grounded: CoarseSceneSpec,
     simulated: CoarseSceneSpec,
     windows: list[EscalationWindow],
-    sim_weight: float = 0.65,
+    sim_weight: float,
 ) -> CoarseSceneSpec:
     """Apply MuJoCo-simulated poses inside escalated windows, retaining grounded poses outside."""
 
@@ -237,6 +239,22 @@ def _blend_window_trajectories(
     return grounded.model_copy(update={"objects": blended_objs})
 
 
+def _input_view_iou(scene: CoarseSceneSpec, case: MvoikCase, frame_indices: list[int]) -> float:
+    rendered = render_coarse_scene_mujoco(
+        scene=scene, frame_indices=frame_indices, views=["input_cam"], width=160, height=120
+    ).get("input_cam", [])
+    if not rendered:
+        return 0.0
+    ious: list[float] = []
+    for pred, f_idx in zip(rendered, frame_indices, strict=True):
+        gt = load_rgba_frame(case.input_frames[f_idx], target_size=(160, 120))
+        pm = pred[..., 3] >= 0.5
+        gm = gt[..., 3] >= 0.5
+        union = int(np.logical_or(pm, gm).sum())
+        ious.append(1.0 if union == 0 else int(np.logical_and(pm, gm).sum()) / float(union))
+    return float(np.mean(ious))
+
+
 def run_global_rigid_physics(
     scene: CoarseSceneSpec,
     frame_indices: list[int],
@@ -244,7 +262,7 @@ def run_global_rigid_physics(
     """Ablation arm (`L1_global_phys`): naive global rigid-body rollout with no contact repair."""
     sim_scene = simulate_mujoco_keyframes(scene, frame_indices)
     xml = build_mjcf_xml(sim_scene, include_floor=True)
-    phys = evaluate_mujoco_scene(xml, num_steps=200, scene=scene)
+    phys = evaluate_mujoco_scene(xml, num_steps=200, scene=scene, delivered_scene=sim_scene)
     return sim_scene, phys
 
 
@@ -253,27 +271,47 @@ def run_layer2_escalation(
     windows: list[EscalationWindow],
     frame_indices: list[int],
     max_iters: int = 3,
+    case: MvoikCase | None = None,
 ) -> tuple[CoarseSceneSpec, PhysicsMetrics, int]:
-    """Iterative simulator-in-the-loop local physics escalation (`E_phys` + `D_phys`)."""
+    """Iterative simulator-in-the-loop local physics escalation with visual reprojection guard."""
     best_scene = scene
     best_phys = evaluate_mujoco_scene(
-        build_mjcf_xml(scene, include_floor=True), num_steps=200, scene=scene
+        build_mjcf_xml(scene, include_floor=True),
+        num_steps=200,
+        scene=scene,
+        delivered_scene=scene,
     )
+    ref_iou = _input_view_iou(scene, case, frame_indices) if case is not None else 0.0
     iters_run = 0
 
     for step_idx in range(1, max_iters + 1):
         iters_run = step_idx
         grounded = _resolve_initial_contacts(best_scene, separation_scale=1.0 + 0.15 * step_idx)
         sim_rollout = simulate_mujoco_keyframes(grounded, frame_indices)
-        candidate = _blend_window_trajectories(grounded, sim_rollout, windows, sim_weight=0.65)
-        cand_xml = build_mjcf_xml(candidate, include_floor=True)
-        cand_phys = evaluate_mujoco_scene(cand_xml, num_steps=200, scene=scene)
+
+        # Pick highest physics blend weight whose input-view silhouette does not collapse.
+        chosen_cand = grounded
+        for weight in (0.55, 0.30, 0.12):
+            cand = _blend_window_trajectories(grounded, sim_rollout, windows, sim_weight=weight)
+            if case is None:
+                chosen_cand = cand
+                break
+            cand_iou = _input_view_iou(cand, case, frame_indices)
+            if cand_iou >= ref_iou - 0.03:
+                chosen_cand = cand
+                break
+            chosen_cand = cand
+
+        cand_xml = build_mjcf_xml(chosen_cand, include_floor=True)
+        cand_phys = evaluate_mujoco_scene(
+            cand_xml, num_steps=200, scene=scene, delivered_scene=chosen_cand
+        )
 
         if (
             cand_phys.max_penetration_m <= best_phys.max_penetration_m + 1e-4
             or cand_phys.counterfactual_survival
         ):
-            best_scene = candidate
+            best_scene = chosen_cand
             best_phys = cand_phys
 
         if (
@@ -286,7 +324,7 @@ def run_layer2_escalation(
 
     notes = [
         *best_scene.notes,
-        f"Layer-2 escalation: {iters_run} iter(s), windows={len(windows)}, "
+        f"Layer-2 escalation: {iters_run} iter(s), floor_z={best_scene.floor_z:.4f}, "
         f"max_pen={best_phys.max_penetration_m:.4f}m, cf_ok={best_phys.counterfactual_survival}",
     ]
     return best_scene.model_copy(update={"notes": notes}), best_phys, iters_run

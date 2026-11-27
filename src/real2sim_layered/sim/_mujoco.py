@@ -33,3 +33,9 @@ def joint_qpos_adr(model: Any, joint_name: str) -> int | None:
     """Return the starting `qpos` index for a named joint, or None if absent."""
     jnt_id = int(_mj.mj_name2id(model, _mj.mjtObj.mjOBJ_JOINT, joint_name))
     return int(model.jnt_qposadr[jnt_id]) if jnt_id >= 0 else None
+
+
+def geom_name_id(model: Any, geom_name: str) -> int | None:
+    """Return the geom ID for `geom_name`, or None if absent."""
+    gid = int(_mj.mj_name2id(model, _mj.mjtObj.mjOBJ_GEOM, geom_name))
+    return gid if gid >= 0 else None

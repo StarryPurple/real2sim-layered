@@ -206,6 +206,7 @@ def _materialize_and_eval(
         gt_by_view=ctx.gt_by_view,
         mjcf_xml=artifacts.mjcf_xml,
         scene=ctx.ref_scene,
+        delivered_scene=scene,
         meta=EvalRunMeta(
             physics_steps=200,
             vlm_tokens_used=ctx.tokens_used,
@@ -308,7 +309,7 @@ def _cmd_run_ablation(
         # Arm 3: L1 + L2 local physics escalation
         t3 = time.perf_counter()
         windows = detect_escalation_windows(case, ikg, eval_indices)
-        l2_scene, l2_phys, _ = run_layer2_escalation(l1_scene, windows, eval_indices)
+        l2_scene, l2_phys, _ = run_layer2_escalation(l1_scene, windows, eval_indices, case=case)
         reports.append(
             _materialize_and_eval(
                 ctx=ctx,

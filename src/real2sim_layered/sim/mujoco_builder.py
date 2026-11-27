@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import itertools
 import math
+from typing import Any
 from xml.sax.saxutils import escape
 
 import mujoco
@@ -11,6 +12,7 @@ import numpy as np
 
 from real2sim_layered.schemas import CameraSpec, CoarseSceneSpec, KeyframePose, SceneObjectSpec
 from real2sim_layered.sim._mujoco import (
+    geom_name_id,
     joint_qpos_adr,
     load_mjcf_model,
     mj_forward,
@@ -37,15 +39,25 @@ def _camera_xyaxes(cam: CameraSpec) -> str:
     return " ".join(f"{v:.5f}" for v in vals)
 
 
-def _geom_size_str(obj: SceneObjectSpec) -> str:
+def _uses_ellipsoid(obj: SceneObjectSpec) -> bool:
+    return obj.primitive == "sphere" and any(
+        abs(kf.scale[0] - kf.scale[1]) > 1e-4 or abs(kf.scale[0] - kf.scale[2]) > 1e-4
+        for kf in obj.keyframes
+    )
+
+
+def _geom_type_and_size_str(obj: SceneObjectSpec) -> tuple[str, str]:
     hx, hy, hz = obj.size_m
+    if _uses_ellipsoid(obj):
+        r = max(0.01, (hx + hy + hz) / 3.0)
+        return "ellipsoid", f"{r:.4f} {r:.4f} {r:.4f}"
     if obj.primitive == "sphere":
         r = max(0.01, (hx + hy + hz) / 3.0)
-        return f"{r:.4f}"
+        return "sphere", f"{r:.4f}"
     if obj.primitive in ("cylinder", "capsule"):
         r = max(0.01, 0.5 * (hx + hy))
-        return f"{r:.4f} {max(0.01, hz):.4f}"
-    return f"{max(0.01, hx):.4f} {max(0.01, hy):.4f} {max(0.01, hz):.4f}"
+        return obj.primitive, f"{r:.4f} {max(0.01, hz):.4f}"
+    return obj.primitive, f"{max(0.01, hx):.4f} {max(0.01, hy):.4f} {max(0.01, hz):.4f}"
 
 
 def _euler_to_quat_wxyz(euler_xyz: tuple[float, float, float]) -> tuple[float, float, float, float]:
@@ -64,13 +76,13 @@ def _euler_to_quat_wxyz(euler_xyz: tuple[float, float, float]) -> tuple[float, f
 def interpolate_object_pose(
     keyframes: list[KeyframePose],
     frame_idx: int,
-) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    """Linearly interpolate (position, euler_xyz) for `frame_idx` across sorted keyframes."""
+) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]:
+    """Linearly interpolate (position, euler_xyz, scale) for `frame_idx` across sorted keyframes."""
     ordered = sorted(keyframes, key=lambda k: k.frame_idx)
     if frame_idx <= ordered[0].frame_idx:
-        return ordered[0].position, ordered[0].euler_xyz
+        return ordered[0].position, ordered[0].euler_xyz, ordered[0].scale
     if frame_idx >= ordered[-1].frame_idx:
-        return ordered[-1].position, ordered[-1].euler_xyz
+        return ordered[-1].position, ordered[-1].euler_xyz, ordered[-1].scale
 
     for left, right in itertools.pairwise(ordered):
         if left.frame_idx <= frame_idx <= right.frame_idx:
@@ -82,8 +94,9 @@ def interpolate_object_pose(
             eul = tuple(
                 left.euler_xyz[i] * (1.0 - alpha) + right.euler_xyz[i] * alpha for i in range(3)
             )
-            return (pos[0], pos[1], pos[2]), (eul[0], eul[1], eul[2])
-    return ordered[-1].position, ordered[-1].euler_xyz
+            scl = tuple(left.scale[i] * (1.0 - alpha) + right.scale[i] * alpha for i in range(3))
+            return (pos[0], pos[1], pos[2]), (eul[0], eul[1], eul[2]), (scl[0], scl[1], scl[2])
+    return ordered[-1].position, ordered[-1].euler_xyz, ordered[-1].scale
 
 
 def build_mjcf_xml(scene: CoarseSceneSpec, include_floor: bool = True) -> str:
@@ -114,13 +127,13 @@ def build_mjcf_xml(scene: CoarseSceneSpec, include_floor: bool = True) -> str:
         pos_s = " ".join(f"{v:.4f}" for v in kf0.position)
         quat_s = " ".join(f"{v:.5f}" for v in _euler_to_quat_wxyz(kf0.euler_xyz))
         rgba_s = " ".join(f"{v:.4f}" for v in obj.color_rgba)
-        size_s = _geom_size_str(obj)
+        geom_type, size_s = _geom_type_and_size_str(obj)
         safe_id = escape(obj.object_id)
         lines.append(f'    <body name="{safe_id}" pos="{pos_s}" quat="{quat_s}">')
         if obj.is_dynamic:
             lines.append(f'      <freejoint name="{safe_id}_jnt"/>')
         lines.append(
-            f'      <geom name="{safe_id}_geom" type="{obj.primitive}" size="{size_s}" '
+            f'      <geom name="{safe_id}_geom" type="{geom_type}" size="{size_s}" '
             f'mass="{obj.mass_kg:.4f}" friction="{obj.friction:.3f} 0.01 0.001" rgba="{rgba_s}"/>'
         )
         lines.append("    </body>")
@@ -176,7 +189,7 @@ def simulate_mujoco_keyframes(
         for obj in scene.objects:
             adr = body_qpos_adr.get(obj.object_id)
             if adr is None or not np.all(np.isfinite(data.qpos[adr : adr + 7])):
-                pos, eul = interpolate_object_pose(obj.keyframes, frame_idx)
+                pos, eul, _ = interpolate_object_pose(obj.keyframes, frame_idx)
             else:
                 q = data.qpos[adr : adr + 7]
                 pos = (float(q[0]), float(q[1]), float(q[2]))
@@ -189,6 +202,22 @@ def simulate_mujoco_keyframes(
         obj.model_copy(update={"keyframes": recorded[obj.object_id]}) for obj in scene.objects
     ]
     return scene.model_copy(update={"objects": new_objs})
+
+
+def _apply_geom_scale(
+    model: Any,
+    obj: SceneObjectSpec,
+    gid: int,
+    base_sz: np.ndarray,
+    scl: tuple[float, float, float],
+) -> None:
+    if obj.primitive == "sphere" and not _uses_ellipsoid(obj):
+        model.geom_size[gid][0] = max(0.005, float(base_sz[0]) * float(np.mean(scl)))
+    elif obj.primitive in ("cylinder", "capsule"):
+        model.geom_size[gid][0] = max(0.005, float(base_sz[0]) * 0.5 * (scl[0] + scl[1]))
+        model.geom_size[gid][1] = max(0.005, float(base_sz[1]) * scl[2])
+    else:
+        model.geom_size[gid][:] = np.maximum(0.005, base_sz * np.array(scl, dtype=np.float64))
 
 
 def render_coarse_scene_mujoco(
@@ -208,11 +237,15 @@ def render_coarse_scene_mujoco(
     seg_renderer.enable_segmentation_rendering()
 
     body_qpos_adr: dict[str, int] = {}
+    geom_base_sizes: dict[str, tuple[int, np.ndarray]] = {}
     for obj in scene.objects:
         if obj.is_dynamic:
             adr = joint_qpos_adr(model, f"{obj.object_id}_jnt")
             if adr is not None:
                 body_qpos_adr[obj.object_id] = adr
+        geom_id = geom_name_id(model, f"{obj.object_id}_geom")
+        if geom_id is not None:
+            geom_base_sizes[obj.object_id] = (geom_id, model.geom_size[geom_id].copy())
 
     available_cams = {cam.name for cam in scene.cameras}
     active_views = [v for v in views if v in available_cams]
@@ -221,12 +254,14 @@ def render_coarse_scene_mujoco(
     try:
         for frame_idx in frame_indices:
             for obj in scene.objects:
+                pos, eul, scl = interpolate_object_pose(obj.keyframes, frame_idx)
                 adr = body_qpos_adr.get(obj.object_id)
-                if adr is None:
-                    continue
-                pos, eul = interpolate_object_pose(obj.keyframes, frame_idx)
-                data.qpos[adr : adr + 3] = pos
-                data.qpos[adr + 3 : adr + 7] = _euler_to_quat_wxyz(eul)
+                if adr is not None:
+                    data.qpos[adr : adr + 3] = pos
+                    data.qpos[adr + 3 : adr + 7] = _euler_to_quat_wxyz(eul)
+                if obj.object_id in geom_base_sizes:
+                    gid, base_sz = geom_base_sizes[obj.object_id]
+                    _apply_geom_scale(model, obj, gid, base_sz, scl)
             mj_forward(model, data)
 
             for view_name in active_views:
