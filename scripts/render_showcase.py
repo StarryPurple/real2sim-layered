@@ -87,6 +87,10 @@ def _studio_mjcf_xml(scene: CoarseSceneSpec, show_hulls: bool = False) -> str:
             f"  <asset>\n{studio_assets}  </asset>\n  <worldbody>",
             1,
         )
+    xml = xml.replace(
+        'diffuse="0.9 0.9 0.9"',
+        'ambient="0.38 0.38 0.38" diffuse="0.85 0.85 0.85"',
+    )
     if 'name="floor"' in xml:
         xml = xml.replace(
             'rgba="0.95 0.95 0.95 1"',

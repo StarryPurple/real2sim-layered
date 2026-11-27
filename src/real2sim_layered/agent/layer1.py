@@ -369,9 +369,15 @@ def synthesize_coarse_scene(
         col_meshes: list[str] = []
 
         if backend == AssetBackend.IMAGE_TO_3D_SIM and obj_i < len(crops_3d):
+            crop = crops_3d[obj_i]
+            crop_bw = max(0.03, float(crop.shape[1]) / float(max(1, case.width)))
+            crop_bh = max(0.03, float(crop.shape[0]) / float(max(1, case.height)))
+            _, crop_size_m = _backproject_to_world(
+                (0.5, 0.5, crop_bw, crop_bh), depth_offset_m=0.0, aspect=aspect
+            )
             asset = get_default_mesh_lifter().lift_rgba_crop(
-                rgba_crop=crops_3d[obj_i],
-                target_size_m=size_m,
+                rgba_crop=crop,
+                target_size_m=crop_size_m,
                 out_dir=resolved_asset_dir,
                 asset_id=f"{case.case_id}_{entity.object_id}",
             )

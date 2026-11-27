@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import math
 import sys
 import types
 from dataclasses import dataclass
@@ -110,7 +109,7 @@ def _compute_spherical_uv(verts: np.ndarray) -> np.ndarray:
 def _bake_spherical_texture(
     uvs: np.ndarray,
     vertex_rgb_u8: np.ndarray,
-    tex_size: int = 128,
+    tex_size: int = 256,
 ) -> Image.Image:
     """Bake per-vertex RGB colors onto a gap-free 2D PNG texture using nearest-neighbor EDT fill."""
     acc = np.zeros((tex_size, tex_size, 3), dtype=np.float64)
@@ -188,11 +187,12 @@ def decompose_and_export_mesh(
     center = 0.5 * (vmin + vmax)
     extents = np.maximum(1e-4, vmax - vmin)
     target_full = np.array([2.0 * target_size_m[0], 2.0 * target_size_m[1], 2.0 * target_size_m[2]])
-    # Match observed X/Z metric extents while preserving learned 3D depth proportion along Y.
-    sx = float(target_full[0] / extents[0])
-    sz = float(target_full[2] / extents[2])
-    sy = math.sqrt(max(1e-6, sx * sz))
-    verts = (verts - center) * np.array([sx, sy, sz], dtype=np.float64)
+    # Scale uniformly from the dominant observed X/Z extent to preserve learned 3D proportions.
+    scale_u = float(max(target_full[0] / extents[0], target_full[2] / extents[2]))
+    scale_u = min(
+        scale_u, float(min(target_full[0] / extents[0], target_full[2] / extents[2])) * 1.4
+    )
+    verts = (verts - center) * scale_u
     half_ext = 0.5 * (verts.max(axis=0) - verts.min(axis=0))
     half_ext_m: Vec3 = (
         max(0.015, float(half_ext[0])),
