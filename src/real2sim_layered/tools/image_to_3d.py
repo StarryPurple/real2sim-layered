@@ -180,6 +180,10 @@ def decompose_and_export_mesh(
         # TripoSR places input view along +X and width along +Y; rotate +90 deg Z to match MuJoCo -Y cam.
         verts = np.stack([verts[:, 1], -verts[:, 0], verts[:, 2]], axis=1)
 
+    # Ensure outward-facing triangle winding (prevents MuJoCo OpenGL backface culling hollow shells).
+    if float(trimesh.Trimesh(vertices=verts, faces=faces, process=False).volume) < 0.0:
+        faces = np.ascontiguousarray(faces[:, [0, 2, 1]])
+
     vmin, vmax = verts.min(axis=0), verts.max(axis=0)
     center = 0.5 * (vmin + vmax)
     extents = np.maximum(1e-4, vmax - vmin)

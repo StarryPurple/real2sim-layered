@@ -44,6 +44,9 @@ def test_decompose_and_export_mesh_runs_in_mujoco(tmp_path: Path) -> None:
     assert asset.texture_path.is_file()
     assert len(asset.collision_mesh_paths) >= 1
     assert all(p.is_file() for p in asset.collision_mesh_paths)
+    loaded_vis = trimesh.load(asset.visual_mesh_path, process=False)
+    assert isinstance(loaded_vis, trimesh.Trimesh)
+    assert float(loaded_vis.volume) > 0.0
 
     scene = CoarseSceneSpec(
         case_id="mesh_smoke",

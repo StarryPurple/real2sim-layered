@@ -8,6 +8,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from scipy.ndimage import binary_fill_holes
 
 from real2sim_layered.schemas import (
     AssetBackend,
@@ -176,15 +177,18 @@ def _split_object_regions(rgba: np.ndarray, num_objects: int) -> list[_RegionSta
             regions.append(_region_stats(rgba, c_xs, c_ys))
         return sorted(regions, key=lambda r: r[0])
 
-    # Fallback: deterministic spatial + color k-means when objects visually touch in 2D.
+    # Fallback: spatially dominant + shading-invariant chromaticity k-means when objects touch in 2D.
     h, w, _ = rgba.shape
+    rgb = rgba[ys, xs, :3].astype(np.float32)
+    rgb_sum = np.maximum(1e-3, rgb.sum(axis=1, keepdims=True))
+    chroma = rgb / rgb_sum
     feats = np.stack(
         [
-            xs.astype(np.float32) / float(w),
-            ys.astype(np.float32) / float(h),
-            rgba[ys, xs, 0] * 0.6,
-            rgba[ys, xs, 1] * 0.6,
-            rgba[ys, xs, 2] * 0.6,
+            xs.astype(np.float32) / float(w) * 1.1,
+            ys.astype(np.float32) / float(h) * 1.1,
+            chroma[:, 0] * 1.8,
+            chroma[:, 1] * 1.8,
+            chroma[:, 2] * 1.8,
         ],
         axis=1,
     )
@@ -266,28 +270,42 @@ def _extract_object_rgba_crops(
     pts_x = xs_all.astype(np.float64) / float(w)
     pts_y = ys_all.astype(np.float64) / float(h)
     pts_rgb = rgba_full[ys_all, xs_all, :3].astype(np.float64)
+    pts_chroma = pts_rgb / np.maximum(1e-3, pts_rgb.sum(axis=1, keepdims=True))
 
+    reg_chromas = [
+        np.array(r[5][:3], dtype=np.float64) / max(1e-3, float(sum(r[5][:3]))) for r in regions
+    ]
     dists = np.stack(
         [
-            (pts_x - r[0]) ** 2
-            + (pts_y - r[1]) ** 2
-            + 0.35 * np.sum((pts_rgb - np.array(r[5][:3])) ** 2, axis=1)
-            for r in regions
+            ((pts_x - r[0]) * 1.1) ** 2
+            + ((pts_y - r[1]) * 1.1) ** 2
+            + 3.24 * np.sum((pts_chroma - rc) ** 2, axis=1)
+            for r, rc in zip(regions, reg_chromas, strict=True)
         ],
         axis=0,
     )
     assign = np.argmin(dists, axis=0)
 
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     crops: list[np.ndarray] = []
     for obj_i in range(len(regions)):
         sel = assign == obj_i
         if int(sel.sum()) < 24:
-            ys, xs = ys_all, xs_all
             obj_mask = mask
         else:
-            ys, xs = ys_all[sel], xs_all[sel]
-            obj_mask = np.zeros((h, w), dtype=bool)
-            obj_mask[ys, xs] = True
+            raw_m = np.zeros((h, w), dtype=np.uint8)
+            raw_m[ys_all[sel], xs_all[sel]] = 1
+            closed = cv2.morphologyEx(raw_m, cv2.MORPH_CLOSE, kernel)
+            filled = np.asarray(binary_fill_holes(closed > 0), dtype=np.uint8)
+            n_lbl, lbls, st, _ = cv2.connectedComponentsWithStats(filled, connectivity=8)
+            if n_lbl > 1:
+                largest = 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
+                obj_mask = np.logical_and(lbls == largest, mask)
+            else:
+                obj_mask = np.logical_and(filled > 0, mask)
+            if int(obj_mask.sum()) < 24:
+                obj_mask = mask
+        ys, xs = np.nonzero(obj_mask)
         y0, y1 = int(ys.min()), int(ys.max()) + 1
         x0, x1 = int(xs.min()), int(xs.max()) + 1
         patch = rgba_full[y0:y1, x0:x1].copy()
