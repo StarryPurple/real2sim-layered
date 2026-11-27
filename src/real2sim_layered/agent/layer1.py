@@ -84,18 +84,48 @@ def build_canonical_cameras(
 
 
 def _estimate_roll_rad(xs: np.ndarray, ys: np.ndarray) -> float:
-    """Estimate bounded in-plane principal-axis tilt angle (radians) from foreground pixels."""
+    """Estimate smooth, bounded in-plane principal-axis tilt angle (radians) without step snaps."""
     if xs.size < 16:
         return 0.0
     pts = np.stack([xs.astype(np.float64), ys.astype(np.float64)], axis=1)
     centered = pts - pts.mean(axis=0, keepdims=True)
     cov = (centered.T @ centered) / float(max(1, xs.size))
     eigvals, eigvecs = np.linalg.eigh(cov)
-    if eigvals[1] < 1.5 * max(1e-6, eigvals[0]):
+    anisotropy = float(eigvals[1] / max(1e-6, eigvals[0]))
+    weight = max(0.0, min(1.0, (anisotropy - 1.35) / 0.85))
+    if weight <= 0.0:
         return 0.0
     vx, vy = float(eigvecs[0, 1]), float(eigvecs[1, 1])
+    if vx < 0.0:
+        vx, vy = -vx, -vy
     angle = math.atan2(-vy, vx)
-    return max(-0.6, min(0.6, angle))
+    return weight * max(-0.45, min(0.45, angle))
+
+
+def _smooth_keyframes(kfs: list[KeyframePose]) -> list[KeyframePose]:
+    """Apply gentle 3-tap temporal smoothing on interior keyframes to suppress per-frame jitter."""
+    if len(kfs) <= 2:
+        return kfs
+    smoothed: list[KeyframePose] = [kfs[0]]
+    for i in range(1, len(kfs) - 1):
+        p0, p1, p2 = kfs[i - 1], kfs[i], kfs[i + 1]
+        pos = tuple(
+            0.25 * p0.position[c] + 0.5 * p1.position[c] + 0.25 * p2.position[c] for c in range(3)
+        )
+        eul = tuple(
+            0.25 * p0.euler_xyz[c] + 0.5 * p1.euler_xyz[c] + 0.25 * p2.euler_xyz[c]
+            for c in range(3)
+        )
+        smoothed.append(
+            p1.model_copy(
+                update={
+                    "position": (pos[0], pos[1], pos[2]),
+                    "euler_xyz": (eul[0], eul[1], eul[2]),
+                }
+            )
+        )
+    smoothed.append(kfs[-1])
+    return smoothed
 
 
 def _region_stats(
@@ -347,7 +377,7 @@ def synthesize_coarse_scene(
                 visual_mesh_path=vis_mesh,
                 texture_path=tex_path,
                 collision_mesh_paths=col_meshes,
-                keyframes=per_obj_kfs[obj_i],
+                keyframes=_smooth_keyframes(per_obj_kfs[obj_i]),
             )
         )
 

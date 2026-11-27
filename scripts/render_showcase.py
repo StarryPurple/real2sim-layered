@@ -230,9 +230,42 @@ def _load_report_index(path: Path) -> dict[tuple[str, str], dict[str, Any]]:
     return {(r["case_id"], r["method_tag"]): r for r in rows}
 
 
+def _smooth_scene_for_video(scene: CoarseSceneSpec) -> CoarseSceneSpec:
+    """Apply 3-tap temporal smoothing to interior keyframes so showcase animations play smoothly."""
+    smoothed_objs = []
+    for obj in scene.objects:
+        kfs = sorted(obj.keyframes, key=lambda k: k.frame_idx)
+        if len(kfs) <= 2:
+            smoothed_objs.append(obj)
+            continue
+        new_kfs = [kfs[0]]
+        for i in range(1, len(kfs) - 1):
+            p0, p1, p2 = kfs[i - 1], kfs[i], kfs[i + 1]
+            pos = tuple(
+                0.25 * p0.position[c] + 0.5 * p1.position[c] + 0.25 * p2.position[c]
+                for c in range(3)
+            )
+            eul = tuple(
+                0.25 * p0.euler_xyz[c] + 0.5 * p1.euler_xyz[c] + 0.25 * p2.euler_xyz[c]
+                for c in range(3)
+            )
+            new_kfs.append(
+                p1.model_copy(
+                    update={
+                        "position": (pos[0], pos[1], pos[2]),
+                        "euler_xyz": (eul[0], eul[1], eul[2]),
+                    }
+                )
+            )
+        new_kfs.append(kfs[-1])
+        smoothed_objs.append(obj.model_copy(update={"keyframes": new_kfs}))
+    return scene.model_copy(update={"objects": smoothed_objs})
+
+
 def _render_layering_videos(out_dir: Path, dataset_root: Path) -> None:
-    rep_idx = _load_report_index(Path("outputs/ablation_all30_sim_proxy/reports.json"))
-    tile_w, tile_h = 280, 210
+    rep_sim = _load_report_index(Path("outputs/ablation_all30_sim_proxy/reports.json"))
+    rep_3d = _load_report_index(Path("outputs/ablation_all30_image_to_3d_sim/reports.json"))
+    tile_w, tile_h = 300, 225
 
     for cid, _, _ in SHOWCASE_CASES:
         case = load_case(dataset_root, cid)
@@ -241,48 +274,76 @@ def _render_layering_videos(out_dir: Path, dataset_root: Path) -> None:
             round(i * (case.num_frames - 1) / float(max(1, n_frames - 1))) for i in range(n_frames)
         ]
 
-        scenes: dict[str, CoarseSceneSpec] = {}
-        for arm in ("L1_only", "L1_global_phys", "L1_L2_L3_full"):
-            spec_p = Path("outputs/ablation_all30_sim_proxy") / arm / cid / "scene_spec.json"
-            scenes[arm] = CoarseSceneSpec.model_validate_json(spec_p.read_text(encoding="utf-8"))
+        s_global = _smooth_scene_for_video(
+            CoarseSceneSpec.model_validate_json(
+                (
+                    Path("outputs/ablation_all30_sim_proxy/L1_global_phys")
+                    / cid
+                    / "scene_spec.json"
+                ).read_text(encoding="utf-8")
+            )
+        )
+        s_sim_ours = _smooth_scene_for_video(
+            CoarseSceneSpec.model_validate_json(
+                (
+                    Path("outputs/ablation_all30_sim_proxy/L1_L2_L3_full") / cid / "scene_spec.json"
+                ).read_text(encoding="utf-8")
+            )
+        )
+        s_3d_ours = _smooth_scene_for_video(
+            CoarseSceneSpec.model_validate_json(
+                (
+                    Path("outputs/ablation_all30_image_to_3d_sim/L1_L2_L3_full")
+                    / cid
+                    / "scene_spec.json"
+                ).read_text(encoding="utf-8")
+            )
+        )
 
         inp_frames = [_load_gt_composite(case.input_frames[f], tile_w, tile_h) for f in fids]
         gt_frames = [_load_gt_composite(case.eval_views["eval_0"][f], tile_w, tile_h) for f in fids]
-        sim_frames = {
-            arm: _render_scene_studio(scenes[arm], fids, view="eval_0", width=tile_w, height=tile_h)
-            for arm in ("L1_only", "L1_global_phys", "L1_L2_L3_full")
-        }
+        f_global = _render_scene_studio(s_global, fids, view="eval_0", width=tile_w, height=tile_h)
+        f_sim = _render_scene_studio(s_sim_ours, fids, view="eval_0", width=tile_w, height=tile_h)
+        f_3d = _render_scene_studio(
+            s_3d_ours, fids, view="eval_0", width=tile_w, height=tile_h, show_hulls=False
+        )
 
-        def _sub(arm: str, case_id: str = cid) -> str:
-            r = rep_idx[(case_id, arm)]
+        def _sub(
+            idx_map: dict[tuple[str, str], dict[str, Any]],
+            arm: str,
+            case_id: str = cid,
+        ) -> str:
+            r = idx_map[(case_id, arm)]
             cf = "CF-OK" if r["physics"]["counterfactual_survival"] else "CF-FAIL"
             return (
-                f"IoU {r['visual']['mean_silhouette_iou']:.3f} | "
-                f"Pen {r['physics']['max_penetration_m']:.3f}m | {cf}"
+                f"Pen {r['physics']['max_penetration_m']:.3f}m | "
+                f"PSNR {r['visual']['mean_masked_psnr_db']:.1f}dB | {cf}"
             )
 
         composed: list[np.ndarray] = []
         for i in range(n_frames):
             tiles = [
-                _label_tile(inp_frames[i], "Input Video", "monocular RGBA"),
-                _label_tile(gt_frames[i], "MVOIK-4D GT", "eval_0 novel view"),
-                _label_tile(sim_frames["L1_only"][i], "L1 Only (Kinematic)", _sub("L1_only")),
+                _label_tile(inp_frames[i], "Input [MVOIK-4D]", "monocular RGBA"),
+                _label_tile(gt_frames[i], "GT eval_0 [MVOIK-4D]", "novel-view target"),
                 _label_tile(
-                    sim_frames["L1_global_phys"][i],
-                    "L1 + Global Physics",
-                    _sub("L1_global_phys"),
+                    f_global[i],
+                    "L1+Global [Baseline]",
+                    _sub(rep_sim, "L1_global_phys"),
                 ),
                 _label_tile(
-                    sim_frames["L1_L2_L3_full"][i],
-                    "L1+L2+L3 Full (Ours)",
-                    _sub("L1_L2_L3_full"),
+                    f_sim[i],
+                    "Ours | sim_proxy",
+                    _sub(rep_sim, "L1_L2_L3_full"),
+                ),
+                _label_tile(
+                    f_3d[i],
+                    "Ours | TripoSR 3D",
+                    _sub(rep_3d, "L1_L2_L3_full"),
                 ),
             ]
-            row = np.concatenate(tiles, axis=1)
-            composed.append(row)
+            composed.append(np.concatenate(tiles, axis=1))
 
         _save_mp4(out_dir / f"layering_{cid}.mp4", composed, fps=10)
-        # Save 3-frame static poster strip (start, middle, end) for slides/print.
         strip = np.concatenate([composed[0], composed[n_frames // 2], composed[-1]], axis=0)
         Image.fromarray(strip).save(out_dir / f"layering_{cid}_strip.png")
         print(f"[VIDEO] layering_{cid}.mp4 ({len(composed)} frames)")
@@ -301,17 +362,21 @@ def _render_h3_backend_videos(out_dir: Path, dataset_root: Path) -> None:
             round(i * (case.num_frames - 1) / float(max(1, n_frames - 1))) for i in range(n_frames)
         ]
 
-        s_sim = CoarseSceneSpec.model_validate_json(
-            (
-                Path("outputs/ablation_all30_sim_proxy/L1_L2_L3_full") / cid / "scene_spec.json"
-            ).read_text(encoding="utf-8")
+        s_sim = _smooth_scene_for_video(
+            CoarseSceneSpec.model_validate_json(
+                (
+                    Path("outputs/ablation_all30_sim_proxy/L1_L2_L3_full") / cid / "scene_spec.json"
+                ).read_text(encoding="utf-8")
+            )
         )
-        s_3d = CoarseSceneSpec.model_validate_json(
-            (
-                Path("outputs/ablation_all30_image_to_3d_sim/L1_L2_L3_full")
-                / cid
-                / "scene_spec.json"
-            ).read_text(encoding="utf-8")
+        s_3d = _smooth_scene_for_video(
+            CoarseSceneSpec.model_validate_json(
+                (
+                    Path("outputs/ablation_all30_image_to_3d_sim/L1_L2_L3_full")
+                    / cid
+                    / "scene_spec.json"
+                ).read_text(encoding="utf-8")
+            )
         )
 
         gt_frames = [_load_gt_composite(case.eval_views["eval_0"][f], tile_w, tile_h) for f in fids]
@@ -355,8 +420,8 @@ def _render_h3_backend_videos(out_dir: Path, dataset_root: Path) -> None:
 
 def _render_counterfactual_videos(out_dir: Path) -> None:
     for cid, backend_dir, label_b in (
-        ("0004_brick_fall_1", "outputs/ablation_all30_sim_proxy", "sim_proxy"),
-        ("0000_cut_apple_1", "outputs/ablation_all30_image_to_3d_sim", "TripoSR + CoACD"),
+        ("0004_brick_fall_1", "outputs/ablation_all30_image_to_3d_sim", "TripoSR 3D + CoACD"),
+        ("0000_cut_apple_1", "outputs/ablation_all30_image_to_3d_sim", "TripoSR 3D + CoACD"),
     ):
         s_l1 = CoarseSceneSpec.model_validate_json(
             (Path(backend_dir) / "L1_only" / cid / "scene_spec.json").read_text(encoding="utf-8")
