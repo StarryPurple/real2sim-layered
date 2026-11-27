@@ -79,6 +79,16 @@ Identical confidence (`0.95`) on correct and misclassified clips confirms that s
 | `topological_split` (12) | `image_to_3d_sim` | 0.060 / 0.148 / 0% | 0.037 / 0.123 / 0% | 0.064 / 0.021 / 100% | 0.055 / 0.013 / 100% |
 | `multiphysics_ood` (2) | `image_to_3d_sim` | 0.014 / 0.016 / 100% | 0.028 / 0.013 / 100% | 0.012 / 0.007 / 100% | 0.012 / 0.007 / 100% |
 
+### H2 feedback-modality ablation (`sim_proxy`, `n = 30`, with counterfactual pre-commit guard)
+
+Adding `counterfactual_survival` preservation to the Layer-3 pre-commit gate (`agent/layer3.py`) lifts `dual_axis` (`L1_L2_L3_full`) to `100.0%` (`30/30`) `CF-OK` (`outputs/ablation_all30_feedback_h2/reports.json`, `scripts/run_feedback_ablation.py`):
+
+| Feedback Modality | Mean IoU | Mean PSNR (dB) | Mean CosSim | Mean MaxPen (m) | Mean TrackErr (m) | CF-OK |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| `visual_only` | 0.1535 | 7.57 | 0.2600 | 0.2328 | 0.0540 | 3.3% (1/30) |
+| `physics_only` | 0.1309 | 7.32 | 0.2321 | **0.0221** | 0.2363 | 96.7% (29/30) |
+| `dual_axis` (Ours) | 0.1280 | 7.34 | 0.2312 | **0.0298** (`-87.2%`, `p=1.86e-09`) | **0.1883** (`-20.3%`) | **100.0% (30/30)** |
+
 ### Key findings (H1 + H2 + H3 at full `n = 30` scale)
 
 - **`H1` (Local vs. Global Physics)**: On all 3 backends, `L1_global_phys` severely degrades visual IoU (`-22.5%` to `-35.7%`) and leaves `83%`–`93%` of scenes failing counterfactual checks. `L1_L2_local` lifts `CF-OK` to **`100%` (`30/30`)** on all 3 backends while **exceeding `L1_only` on Mean IoU and Patch Cosine Sim** across all 3 backends (`p <= 2.38e-03` vs. global physics; `p <= 1.86e-09` on penetration).

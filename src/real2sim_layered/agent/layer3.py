@@ -318,11 +318,12 @@ def detect_and_apply_fallback(
             scene=l1_scene,
             delivered_scene=candidate,
         )
-        if (
+        phys_ok = (
             cand_phys.stable
             and cand_phys.max_penetration_m <= l2_phys.max_penetration_m + 0.015
-            and cand_iou >= l2_iou - 0.005
-        ):
+            and (cand_phys.counterfactual_survival or not l2_phys.counterfactual_survival)
+        )
+        if phys_ok and cand_iou >= l2_iou - 0.005:
             return (
                 candidate,
                 AnomalyReport(
